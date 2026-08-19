@@ -1,4 +1,28 @@
-# HD事業部 業務システム・ツール統合リポジトリ (hd-system)
+# HD取得ジャンル限定版 (hd-system-focused-genres)
+
+このリポジトリは `hd-system` から派生した、取得対象を7ジャンルに限定する運用版です。元リポジトリの取得項目、CSV列順、GAS・後工程との互換性を維持し、対象ジャンルだけを絞っています。
+
+## 媒体ごとの担当ジャンル
+
+| 媒体 | 対象ジャンル |
+|---|---|
+| Google Maps | カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥 |
+| 食べログ | カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥 |
+| Hot Pepper Beauty | 美容院 |
+
+食べログでは「バー・お酒」カテゴリを巡回し、店舗名または取得元ジャンルに明示的なスナック表記がある店舗だけを「スナック」に分類します。「バー・お酒」全体をスナック扱いにはしません。
+
+## Chrome拡張機能
+
+- Google Maps: `extensions/google-maps-scraper/`
+- 食べログ: `extensions/restaurant-data-scraper_v3.0.0/`
+- Hot Pepper Beauty: `extensions/hotpepper-beauty-scraper/`
+
+各ディレクトリをChromeの「パッケージ化されていない拡張機能を読み込む」から指定してください。
+
+---
+
+# HD事業部 業務システム・ツール統合リポジトリ
 
 本リポジトリは、HD事業部で運用している業務効率化システム、Chrome拡張機能、GAS (Google Apps Script)、データ連携・正規化ツールを一元管理するための社内専用リポジトリです。
 

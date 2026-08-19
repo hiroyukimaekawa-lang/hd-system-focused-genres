@@ -2,7 +2,7 @@
  * offscreen.js
  * サロン個別詳細パース特化エンジン v3.4.0
  * 改善点:
- *   - ジャンルをヘアサロンに統一
+ *   - ジャンルを美容院に統一
  *   - 定休日から営業日を生成
  *   - 営業時間パース強化（10時～20時・平日/土日祝・最終受付 など）
  *   - HP有無判定改善（SNS・予約サイトを公式HPと誤判定しない）
@@ -353,7 +353,7 @@ async function fetchAndParseDetail(link) {
 
         return {
             name,
-            genre: 'ヘアサロン',           // ★ジャンルはヘアサロンに統一
+            genre: '美容院',               // ★美容院はHPB専用拡張で取得
             sourceGenre: sourceGenreRaw,    // ★取得元ジャンル（媒体上のカテゴリ名）
             address,
             phone,
@@ -393,7 +393,7 @@ async function processDetailLinks(tabId, links, currentListUrl) {
 
                     const finalDetail = {
                         name: detail.name,
-                        genre: detail.genre,                    // 'ヘアサロン'
+                        genre: detail.genre,                    // '美容院'
                         sourceGenre: detail.sourceGenre,        // 取得元ジャンル
                         prefecture: parsedAddr.prefecture,
                         city: parsedAddr.city,

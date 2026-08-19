@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "食べログ・ホットペッパー対応 飲食店リスト取得ツール",
-  "version": "3.0.0",
-  "description": "検索結果から店舗情報を自動取得してCSVダウンロード",
+  "name": "HD 食べログスクレイパー - 飲食6ジャンル限定版",
+  "version": "4.0.0",
+  "description": "食べログから飲食6ジャンルの店舗情報を取得してCSVダウンロード",
   "permissions": [
     "activeTab",
     "scripting",
@@ -13,9 +13,7 @@
     "offscreen"
   ],
   "host_permissions": [
-    "https://tabelog.com/*",
-    "https://www.hotpepper.jp/*",
-    "https://hotpepper.jp/*"
+    "https://tabelog.com/*"
   ],
   "background": {
     "service_worker": "src/background.js"
@@ -23,9 +21,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://tabelog.com/*",
-        "https://www.hotpepper.jp/*",
-        "https://hotpepper.jp/*"
+        "https://tabelog.com/*"
       ],
       "js": [
         "src/content.js"

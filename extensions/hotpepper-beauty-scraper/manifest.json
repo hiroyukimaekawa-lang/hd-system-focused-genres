@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "HPB サロンリスト取得ツール",
-  "version": "3.3.0",
+  "name": "HD Hot Pepper Beauty Scraper - 美容院限定版",
+  "version": "3.3.1",
   "description": "ホットペッパービューティーのサロン情報を一括取得します",
   "permissions": [
     "activeTab",

@@ -1349,50 +1349,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
 // =====================================================================
 // =====================================================================
-// 食べログ「人気のジャンル」固定カテゴリ一覧（34種類・スラッグは食べログ側で固定）
+// 食べログ「人気のジャンル」固定カテゴリ一覧（対象5カテゴリ・スラッグは食べログ側で固定）
 // バルーンをホバーしてDOMから拾う方式は、対象要素の取り違えや別バルーンの
 // 混入（＝他エリア混入バグの原因）が起きやすいため、エリアURLとスラッグから
-// 直接34カテゴリのURLを組み立てる方式に切り替える。
+// 対象カテゴリのURLを直接組み立てる。
 // =====================================================================
 const TABELOG_POPULAR_GENRE_SLUGS = [
-  { name: '和食', slug: 'washoku' },
-  { name: '日本料理', slug: 'japanese' },
-  { name: '寿司', slug: 'sushi' },
-  { name: '海鮮・魚介', slug: 'seafood' },
-  { name: 'そば（蕎麦）', slug: 'soba' },
-  { name: 'うなぎ', slug: 'unagi' },
-  { name: '焼き鳥', slug: 'yakitori' },
-  { name: '洋食', slug: 'yoshoku' },
-  { name: 'フレンチ', slug: 'french' },
-  { name: 'イタリアン', slug: 'italian' },
-  { name: 'ステーキ', slug: 'steak' },
-  { name: '中華料理', slug: 'chinese' },
-  { name: 'ラーメン', slug: 'ramen' },
-  { name: 'カレー', slug: 'curry' },
-  { name: '居酒屋', slug: 'izakaya' },
-  { name: 'パン', slug: 'pan' },
-  { name: 'スイーツ', slug: 'sweets' },
-  { name: 'バー・お酒', slug: 'bar' },
-  { name: '天ぷら', slug: 'tempura' },
-  { name: '焼肉', slug: 'yakiniku' },
-  { name: '料理旅館', slug: 'ryokan' },
-  { name: 'ハンバーグ', slug: 'hamburgersteak' },
-  { name: 'とんかつ', slug: 'tonkatsu' },
-  { name: 'うどん', slug: 'udon' },
-  { name: '沖縄料理', slug: 'okinawafood' },
-  { name: 'ハンバーガー', slug: 'hamburger' },
-  { name: 'パスタ', slug: 'pasta' },
-  { name: 'ピザ', slug: 'pizza' },
-  { name: '餃子', slug: 'gyouza' },
-  { name: 'ホルモン', slug: 'horumon' },
   { name: 'カフェ', slug: 'cafe' },
-  { name: '喫茶店', slug: 'kissaten' },
-  { name: 'ケーキ', slug: 'cake' },
-  { name: '食堂', slug: 'teishoku' },
-  { name: 'ビュッフェ・バイキング', slug: 'viking' }
+  { name: 'スイーツ', slug: 'sweets' },
+  { name: '居酒屋', slug: 'izakaya' },
+  { name: 'バー・お酒', slug: 'bar' },
+  { name: '焼き鳥', slug: 'yakitori' },
 ];
 
-// 食べログの34カテゴリ → GAS側で最終的に使う統一ジャンル（20分類）への対応表。
+// 食べログカテゴリ → GAS側で最終的に使う統一ジャンルへの対応表。
 // GAS側の HD_GENRE_MAP / HD_TARGET_GENRES と同じ対応関係にしておくこと。
 // （例: うなぎ・天ぷら・とんかつ・沖縄料理・日本料理・海鮮＝すべて「和食」に集約、
 // 　　  ホルモン＝「焼肉」に集約、餃子＝「中華」に集約 など）
@@ -1416,7 +1386,7 @@ const TABELOG_GENRE_TO_FINAL_GENRE = {
   '居酒屋': '居酒屋',
   'パン': 'パン屋',
   'スイーツ': 'スイーツ',
-  'バー・お酒': 'Bar',
+  'バー・お酒': 'バー',
   '天ぷら': '和食',
   '焼肉': '焼肉',
   'ハンバーグ': '洋食',
@@ -1435,7 +1405,7 @@ const TABELOG_GENRE_TO_FINAL_GENRE = {
   '料理旅館': '和食',
   'ビュッフェ・バイキング': '和食',
 
-  // ↓ここから: 詳細ページ側の自由記述ジャンルタグ（34カテゴリの枠外）で
+  // ↓ここから: 詳細ページ側の自由記述ジャンルタグ（固定カテゴリの枠外）で
   // 実データ上よく出現する表記。人気ジャンル巡回でforceGenreに頼らず
   // 詳細ページ自身のジャンルから統一ジャンルを決められるようにするための追加
   // （例: 木更津市「和食」巡回結果296件が全件「和食」になり、実際は寿司・焼き鳥・
@@ -1470,8 +1440,8 @@ const TABELOG_GENRE_TO_FINAL_GENRE = {
   'ちゃんぽん': 'ラーメン',
   '牛タン': '焼肉',
   'ビュッフェ': '和食',
-  'バー': 'Bar',
-  'ダイニングバー': 'Bar',
+  'バー': 'バー',
+  'ダイニングバー': 'バー',
   '飲茶・点心': '中華',
   '台湾料理': '中華',
   'ろばた焼き': '居酒屋',
@@ -1493,11 +1463,8 @@ function mapToFinalGenre(rawCategoryName) {
   return raw;
 }
 
-// GAS側のHD_TARGET_GENRESと完全一致させること（19種類・弁当はテイクアウト専門店に統合済み）
-const FINAL_GENRE_LIST = [
-  'カフェ', '居酒屋', 'スナック', 'Bar', 'パン屋', '焼き鳥', 'お好み焼き', '焼肉', 'スイーツ', '中華',
-  'ハンバーガー', '蕎麦・うどん', '寿司', '和食', '洋食', '定食・食堂', '韓国', 'テイクアウト専門店', 'ラーメン'
-];
+// 本派生版の最終出力ジャンル。美容院はHot Pepper Beauty専用拡張が担当する。
+const FINAL_GENRE_LIST = ['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥'];
 function isValidFinalGenre(genre) {
   return FINAL_GENRE_LIST.indexOf(String(genre || '').trim()) !== -1;
 }
@@ -1581,7 +1548,7 @@ function resolveFinalGenre(rawGenre, storeName) {
 }
 
 // 現在の一覧URL（例: https://tabelog.com/chiba/C12234/rstLst/...）から
-// 都道府県＋エリアコードだけを取り出し、34カテゴリすべてのURLを組み立てる。
+// 都道府県＋エリアコードだけを取り出し、対象カテゴリのURLを組み立てる。
 function buildTabelogPopularGenreLinks(listUrl) {
   const m = String(listUrl || '').match(/^(https:\/\/tabelog\.com\/[a-z]+\/[A-Za-z]\d+)\//);
   if (!m) return [];
@@ -1874,7 +1841,10 @@ async function runPopularGenreCrawl(tabId, listUrl, maxItemsPerGenre, speedConfi
         // task.results はrunCrawlTask内ですでに最終統一ジャンルへ変換済みだが、念のため保険
         const taggedResults = finishedTask.results.map(r => ({
           ...r,
-          genre: mapToFinalGenre(name),
+          // 「バー・お酒」配下でも、詳細ジャンルまたは店名から明示的に
+          // スナックと判定できた店舗はスナックを維持する。それ以外を
+          // 一括してスナック扱いせず、巡回カテゴリの「バー」を採用する。
+          genre: isValidFinalGenre(r.genre) ? r.genre : mapToFinalGenre(name),
           source_genre: name
         }));
         allResults.push(...taggedResults);
