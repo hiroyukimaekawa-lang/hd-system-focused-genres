@@ -122,7 +122,7 @@ CSVを1回だけ自動ダウンロード（state.downloaded フラグで二重�
 
 ## 8. HDシステムへ格納する際の整理
 
-配置先: `hd-system/extensions/hotpepper-beauty-scraper/`
+配置先: `hd-system-focused-genres/extensions/hd-hpb-beauty/`
 
 格納ファイル:
 ```text

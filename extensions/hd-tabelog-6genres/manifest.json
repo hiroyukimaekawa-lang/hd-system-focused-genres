@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HD 食べログスクレイパー - 飲食6ジャンル限定版",
-  "version": "4.1.0",
+  "name": "【限定版】HD 食べログ 6ジャンル",
+  "short_name": "HD 食べログ 6ジャンル",
+  "version": "4.2.0",
   "description": "食べログから飲食6ジャンルの店舗情報を取得してCSVダウンロード",
   "permissions": [
     "activeTab",
@@ -40,6 +41,7 @@
     }
   ],
   "action": {
+    "default_title": "【限定版】HD 食べログ 6ジャンル",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

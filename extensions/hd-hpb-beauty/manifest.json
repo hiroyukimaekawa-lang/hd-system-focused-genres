@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HD Hot Pepper Beauty Scraper - 美容院限定版",
-  "version": "3.3.1",
+  "name": "【限定版】HD HPB 美容院",
+  "short_name": "HD HPB 美容院",
+  "version": "3.4.0",
   "description": "ホットペッパービューティーのサロン情報を一括取得します",
   "permissions": [
     "activeTab",
@@ -18,6 +19,7 @@
     "service_worker": "src/background.js"
   },
   "action": {
+    "default_title": "【限定版】HD HPB 美容院",
     "default_popup": "src/popup.html",
     "default_icon": {
       "16": "icons/icon16.png",

@@ -14,9 +14,9 @@
 
 ## Chrome拡張機能
 
-- Google Maps: `extensions/google-maps-scraper/`
-- 食べログ: `extensions/restaurant-data-scraper_v3.0.0/`
-- Hot Pepper Beauty: `extensions/hotpepper-beauty-scraper/`
+- Google Maps限定版: `extensions/hd-maps-6genres/`
+- 食べログ限定版: `extensions/hd-tabelog-6genres/`
+- Hot Pepper Beauty美容院限定版: `extensions/hd-hpb-beauty/`
 
 各ディレクトリをChromeの「パッケージ化されていない拡張機能を読み込む」から指定してください。
 
@@ -44,8 +44,9 @@ hd-system/
 │   │   └── updates.json    # アップデート履歴データソース
 │   └── assets/             # ポータル用静的アセット
 ├── extensions/             # Chrome拡張機能モジュール
-│   ├── google-maps-scraper/      # Googleマップ店舗データ取得拡張機能 (v4.0)
-│   └── restaurant-data-scraper/  # 食べログ・ホットペッパー店舗データ取得拡張機能
+│   ├── hd-maps-6genres/          # 【限定版】Google Maps 飲食6ジャンル
+│   ├── hd-tabelog-6genres/       # 【限定版】食べログ 飲食6ジャンル
+│   └── hd-hpb-beauty/            # 【限定版】Hot Pepper Beauty 美容院
 ├── gas/                    # Google Apps Script コード・テンプレート
 │   └── list-normalizer/    # CSV統合・重複排除・チェーン除外・CSV生成GAS
 │       ├── README.md

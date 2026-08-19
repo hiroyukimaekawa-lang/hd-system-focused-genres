@@ -11,28 +11,28 @@ const csvHeaders = [
 ];
 
 test('Google Maps genre master contains exactly the focused six genres', () => {
-  const config = JSON.parse(read('extensions/google-maps-scraper/config/genres.json'));
+  const config = JSON.parse(read('extensions/hd-maps-6genres/config/genres.json'));
   assert.deepEqual(config.genres, focusedGenres);
   assert.equal(config.version, '5.0');
 });
 
 test('Google Maps popup uses focused genre selection UI', () => {
-  const manifest = JSON.parse(read('extensions/google-maps-scraper/manifest.json'));
-  const popupHtml = read('extensions/google-maps-scraper/popup-v3.html');
-  const popupJs = read('extensions/google-maps-scraper/popup-v3.js');
-  assert.equal(manifest.version, '5.1.1');
-  assert.equal(manifest.name, 'HD Maps 飲食6ジャンル限定版');
-  assert.equal(manifest.action.default_title, 'HD Maps 飲食6ジャンル限定版');
+  const manifest = JSON.parse(read('extensions/hd-maps-6genres/manifest.json'));
+  const popupHtml = read('extensions/hd-maps-6genres/popup-v3.html');
+  const popupJs = read('extensions/hd-maps-6genres/popup-v3.js');
+  assert.equal(manifest.version, '5.2.0');
+  assert.equal(manifest.name, '【限定版】HD Maps 6ジャンル');
+  assert.equal(manifest.action.default_title, '【限定版】HD Maps 6ジャンル');
   assert.match(popupHtml, /id="v3-genres-container"/);
   assert.doesNotMatch(popupHtml, /id="v3-keyword-input"/);
   assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
 });
 
 test('Tabelog crawl is limited to five source categories producing six final genres', () => {
-  const manifest = JSON.parse(read('extensions/restaurant-data-scraper_v3.0.0/manifest.json'));
-  const popup = read('extensions/restaurant-data-scraper_v3.0.0/src/popup.js');
-  const offscreen = read('extensions/restaurant-data-scraper_v3.0.0/src/offscreen.js');
-  assert.equal(manifest.version, '4.1.0');
+  const manifest = JSON.parse(read('extensions/hd-tabelog-6genres/manifest.json'));
+  const popup = read('extensions/hd-tabelog-6genres/src/popup.js');
+  const offscreen = read('extensions/hd-tabelog-6genres/src/offscreen.js');
+  assert.equal(manifest.version, '4.2.0');
   assert.match(popup, /const HD_POPULAR_GENRES = \['カフェ', 'スイーツ', '居酒屋', 'バー・お酒', '焼き鳥'\]/);
   assert.match(offscreen, /const FINAL_GENRE_LIST = \['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥'\]/);
   assert.match(offscreen, /genre: isValidFinalGenre\(r\.genre\) \? r\.genre : mapToFinalGenre\(name\)/);
@@ -41,9 +41,9 @@ test('Tabelog crawl is limited to five source categories producing six final gen
 
 test('all extension manifests are valid Manifest V3 JSON', () => {
   for (const path of [
-    'extensions/google-maps-scraper/manifest.json',
-    'extensions/restaurant-data-scraper_v3.0.0/manifest.json',
-    'extensions/hotpepper-beauty-scraper/manifest.json'
+    'extensions/hd-maps-6genres/manifest.json',
+    'extensions/hd-tabelog-6genres/manifest.json',
+    'extensions/hd-hpb-beauty/manifest.json'
   ]) {
     const manifest = JSON.parse(read(path));
     assert.equal(manifest.manifest_version, 3, path);
@@ -52,16 +52,16 @@ test('all extension manifests are valid Manifest V3 JSON', () => {
 });
 
 test('Tabelog extension does not claim Hot Pepper Gourmet', () => {
-  const manifest = JSON.parse(read('extensions/restaurant-data-scraper_v3.0.0/manifest.json'));
+  const manifest = JSON.parse(read('extensions/hd-tabelog-6genres/manifest.json'));
   assert.deepEqual(manifest.host_permissions, ['https://tabelog.com/*']);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://tabelog.com/*']);
 });
 
 test('CSV headers remain compatible across all three scrapers', () => {
   for (const path of [
-    'extensions/google-maps-scraper/background.js',
-    'extensions/restaurant-data-scraper_v3.0.0/src/background.js',
-    'extensions/hotpepper-beauty-scraper/src/background.js'
+    'extensions/hd-maps-6genres/background.js',
+    'extensions/hd-tabelog-6genres/src/background.js',
+    'extensions/hd-hpb-beauty/src/background.js'
   ]) {
     const source = read(path);
     for (const header of csvHeaders) assert.ok(source.includes(`'${header}'`), `${path}: ${header}`);
@@ -69,7 +69,7 @@ test('CSV headers remain compatible across all three scrapers', () => {
 });
 
 test('Hot Pepper Beauty emits only the beauty-salon genre', () => {
-  const source = read('extensions/hotpepper-beauty-scraper/src/offscreen.js');
+  const source = read('extensions/hd-hpb-beauty/src/offscreen.js');
   assert.match(source, /genre: '美容院'/);
   assert.doesNotMatch(source, /genre: 'ヘアサロン'/);
 });

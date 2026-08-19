@@ -391,7 +391,7 @@
       "公式HPの有無は媒体ページの有無とは分けて判定する"
     ],
     "links": {
-      "github": "extensions/hotpepper-beauty-scraper/",
+      "github": "extensions/hd-hpb-beauty/",
       "requirements": "requirements/hotpepper-beauty-scraper-review.md"
     },
     "lastUpdated": "2026-06-29",

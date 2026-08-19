@@ -1,4 +1,4 @@
-# Google Maps Lead Scraper - Keyword Mode
+# 【限定版】HD Maps 6ジャンル
 
 Googleマップから営業リストを取得するChrome拡張機能です。
 固定ジャンル一覧ではなく、任意の「エリア」「検索キーワード」「CSV上のジャンル」を入力して取得します。
