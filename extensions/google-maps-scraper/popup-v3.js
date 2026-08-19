@@ -26,6 +26,7 @@ const V3K = {
   rangeMode: 'v3_rangeMode',
   selectedAreas: 'v3_selectedAreas'
 };
+V3K.selectedGenres = 'v3_selectedGenres';
 
 const OUTPUT_HEADERS = [
   '店名', 'ジャンル', '検索ジャンル', '取得元ジャンル', '都道府県', '市区町村', '住所', '電話番号',
@@ -37,9 +38,10 @@ const OUTPUT_HEADERS = [
 document.addEventListener('DOMContentLoaded', () => {
   const elCity = document.getElementById('v3-city-input');
   const elAreaGroup = document.getElementById('v3-area-group-select');
-  const elKeyword = document.getElementById('v3-keyword-input');
-  const elOutputGenre = document.getElementById('v3-output-genre-input');
-  const elBulk = document.getElementById('v3-bulk-input');
+  const elGenresContainer = document.getElementById('v3-genres-container');
+  const elGenreSummary = document.getElementById('v3-genre-summary');
+  const btnGenreAll = document.getElementById('v3-genre-all');
+  const btnGenreClear = document.getElementById('v3-genre-clear');
   const elMaxRange = document.getElementById('v3-max-items');
   const elMaxVal = document.getElementById('v3-max-val');
   const elScrapeMode = document.getElementById('v3-scrape-mode');
@@ -73,6 +75,8 @@ document.addEventListener('DOMContentLoaded', () => {
   let availableAreas = [];
   let selectedAreas = [];
   let areaGroups = [];
+  let availableGenres = [];
+  let selectedGenres = [];
   let areaLoadTimer = null;
 
   const normalizeAreaText = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
@@ -97,30 +101,24 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   (async () => {
-    const stored = await storageGet([V3K.city, V3K.keyword, V3K.outputGenre, V3K.maxItems, V3K.scrapeMode, V3K.selectedAreas]);
+    const stored = await storageGet([V3K.city, V3K.maxItems, V3K.scrapeMode, V3K.selectedAreas, V3K.selectedGenres]);
     if (stored[V3K.city]) elCity.value = stored[V3K.city];
-    if (stored[V3K.keyword]) elKeyword.value = stored[V3K.keyword];
-    if (stored[V3K.outputGenre]) elOutputGenre.value = stored[V3K.outputGenre];
     selectedAreas = Array.isArray(stored[V3K.selectedAreas]) ? stored[V3K.selectedAreas] : [];
+    selectedGenres = Array.isArray(stored[V3K.selectedGenres]) ? stored[V3K.selectedGenres] : [];
     if (stored[V3K.scrapeMode]) elScrapeMode.value = stored[V3K.scrapeMode];
     if (stored[V3K.maxItems]) {
       elMaxRange.value = stored[V3K.maxItems];
       elMaxVal.textContent = stored[V3K.maxItems];
     }
     await loadAreaGroups();
+    await loadGenres();
     syncAreaGroupSelect();
     await loadAreasForInput();
     refreshStatus(true);
     setInterval(refreshStatus, 1000);
   })();
 
-  [elCity, elKeyword, elOutputGenre].forEach(el => {
-    el.addEventListener('input', () => storageSet({
-      [V3K.city]: elCity.value.trim(),
-      [V3K.keyword]: elKeyword.value.trim(),
-      [V3K.outputGenre]: elOutputGenre.value.trim()
-    }));
-  });
+  elCity.addEventListener('input', () => storageSet({ [V3K.city]: elCity.value.trim() }));
   elCity.addEventListener('input', () => {
     syncAreaGroupSelect();
     clearTimeout(areaLoadTimer);
@@ -143,22 +141,52 @@ document.addEventListener('DOMContentLoaded', () => {
     persistSelectedAreas();
     renderAreaCheckboxes();
   });
+  btnGenreAll.addEventListener('click', () => {
+    selectedGenres = availableGenres.slice();
+    persistSelectedGenres();
+    renderGenreCheckboxes();
+  });
+  btnGenreClear.addEventListener('click', () => {
+    selectedGenres = [];
+    persistSelectedGenres();
+    renderGenreCheckboxes();
+  });
   elMaxRange.addEventListener('input', e => {
     elMaxVal.textContent = e.target.value;
     storageSet({ [V3K.maxItems]: parseInt(e.target.value, 10) });
   });
   elScrapeMode.addEventListener('change', e => storageSet({ [V3K.scrapeMode]: e.target.value }));
 
-  function parseBulkTasks(text) {
-    return String(text || '')
-      .split(/\r?\n/)
-      .map(line => line.trim())
-      .filter(line => line && !line.startsWith('#'))
-      .map(line => {
-        const parts = line.split(/[,，\t]/).map(s => s.trim()).filter(Boolean);
-        return { area: parts[0] || '', keyword: parts[1] || '', outputGenre: parts[2] || parts[1] || '' };
-      })
-      .filter(t => t.area && t.keyword && t.outputGenre);
+  async function loadGenres() {
+    const res = await sendMsg({ action: 'v3_getGenres' });
+    availableGenres = res && res.ok && Array.isArray(res.genres) ? res.genres : [];
+    selectedGenres = selectedGenres.filter(genre => availableGenres.includes(genre));
+    if (!selectedGenres.length) selectedGenres = availableGenres.slice();
+    persistSelectedGenres();
+    renderGenreCheckboxes();
+  }
+
+  function persistSelectedGenres() {
+    storageSet({ [V3K.selectedGenres]: selectedGenres });
+  }
+
+  function renderGenreCheckboxes() {
+    elGenresContainer.innerHTML = availableGenres.map((genre, index) => {
+      const id = `v3-genre-${index}`;
+      const checked = selectedGenres.includes(genre);
+      return `<label class="v3-genre-item${checked ? ' checked' : ''}" for="${id}">
+        <input type="checkbox" id="${id}" value="${escapeHtml(genre)}" ${checked ? 'checked' : ''}>
+        <span>${escapeHtml(genre)}</span>
+      </label>`;
+    }).join('');
+    elGenresContainer.querySelectorAll('input[type="checkbox"]').forEach(input => {
+      input.addEventListener('change', () => {
+        selectedGenres = Array.from(elGenresContainer.querySelectorAll('input[type="checkbox"]:checked')).map(el => el.value);
+        persistSelectedGenres();
+        renderGenreCheckboxes();
+      });
+    });
+    elGenreSummary.textContent = `${selectedGenres.length} / ${availableGenres.length} 選択`;
   }
 
   async function loadAreaGroups() {
@@ -228,30 +256,27 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   btnStart.addEventListener('click', async () => {
-    const bulkTasks = parseBulkTasks(elBulk.value);
-    let tasks = bulkTasks;
-    if (!tasks.length) {
-      const area = elCity.value.trim();
-      const keyword = elKeyword.value.trim();
-      const outputGenre = elOutputGenre.value.trim() || keyword;
-      if (!area) { alert('エリアを入力してください'); return; }
-      if (!keyword) { alert('検索キーワードを入力してください'); return; }
-      if (shouldLoadAreaList(area) && !availableAreas.length) await loadAreasForInput();
-      if (shouldLoadAreaList(area) && availableAreas.length) {
-        if (!selectedAreas.length) { alert('取得する市町村を選択してください'); return; }
-        tasks = selectedAreas.map(areaName => ({ area: composeSelectedArea(area, areaName), keyword, outputGenre }));
-      } else {
-        tasks = [{ area, keyword, outputGenre }];
-      }
+    const area = elCity.value.trim();
+    if (!area) { alert('エリアを入力してください'); return; }
+    if (!selectedGenres.length) { alert('取得するジャンルを選択してください'); return; }
+    if (shouldLoadAreaList(area) && !availableAreas.length) await loadAreasForInput();
+    let targetAreas = [area];
+    if (shouldLoadAreaList(area) && availableAreas.length) {
+      if (!selectedAreas.length) { alert('取得する市町村を選択してください'); return; }
+      targetAreas = selectedAreas.map(areaName => composeSelectedArea(area, areaName));
     }
+    const tasks = targetAreas.flatMap(targetArea => selectedGenres.map(genre => ({
+      area: targetArea,
+      keyword: genre,
+      outputGenre: genre
+    })));
 
     const maxItems = parseInt(elMaxRange.value, 10) || 100;
     const scrapeMode = elScrapeMode.value || 'standard';
     const baseCity = elCity.value.trim() || tasks[0]?.area || '';
     await storageSet({
       [V3K.city]: baseCity,
-      [V3K.keyword]: tasks[0]?.keyword || '',
-      [V3K.outputGenre]: tasks[0]?.outputGenre || '',
+      [V3K.selectedGenres]: selectedGenres,
       [V3K.maxItems]: maxItems,
       [V3K.scrapeMode]: scrapeMode
     });

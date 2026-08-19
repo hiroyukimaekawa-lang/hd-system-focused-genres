@@ -2,18 +2,18 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>Google Maps Lead Scraper</title>
+  <title>HD Google Maps Scraper - 飲食6ジャンル限定版</title>
   <link rel="stylesheet" href="popup-v3.css">
 </head>
 <body>
   <div class="v3-container">
     <header class="v3-header">
-      <h2>Google Maps Lead Scraper <span class="v3-badge">area + keyword</span></h2>
-      <p class="v3-subtitle">地域一覧から選択 → 検索ワード追加 → 詳細クリック取得 <span id="v3-status-badge" class="v3-status-badge">待機中</span></p>
+      <h2>Google Maps 飲食6ジャンル限定版 <span class="v3-badge">focused</span></h2>
+      <p class="v3-subtitle">地域と対象ジャンルを選択して店舗情報を取得 <span id="v3-status-badge" class="v3-status-badge">待機中</span></p>
     </header>
 
     <section class="v3-panel">
-      <h3>1. 地域一覧と検索ワード</h3>
+      <h3>1. 地域を選択</h3>
       <div class="v3-form-row v3-stack">
         <label class="v3-label" for="v3-area-group-select">登録地域</label>
         <select id="v3-area-group-select" class="v3-input">
@@ -24,15 +24,7 @@
         <label class="v3-label" for="v3-city-input">地域名</label>
         <input type="text" id="v3-city-input" class="v3-input" placeholder="例: 千葉県">
       </div>
-      <div class="v3-form-row v3-stack">
-        <label class="v3-label" for="v3-keyword-input">検索キーワード</label>
-        <input type="text" id="v3-keyword-input" class="v3-input" placeholder="例: グランピング / 古着屋 / 中古車販売">
-      </div>
-      <div class="v3-form-row v3-stack">
-        <label class="v3-label" for="v3-output-genre-input">CSV上のジャンル（任意）</label>
-        <input type="text" id="v3-output-genre-input" class="v3-input" placeholder="未入力なら検索キーワードを使用">
-      </div>
-      <div class="v3-helper">登録地域を選ぶと市町村一覧が出ます。Googleマップ検索は「選択した地域 + 検索キーワード」で実行します。</div>
+      <div class="v3-helper">登録地域を選ぶと市町村一覧が表示されます。</div>
       <div id="v3-area-picker" class="v3-area-picker" hidden>
         <div class="v3-area-picker-head">
           <span class="v3-label">取得する市町村</span>
@@ -49,9 +41,14 @@
     </section>
 
     <section class="v3-panel">
-      <h3>2. 一括取得（任意）</h3>
-      <textarea id="v3-bulk-input" class="v3-textarea" placeholder="1行ずつ入力。形式: エリア, 検索キーワード（CSV上のジャンルは任意）&#10;例: 千葉県 館山市, グランピング&#10;千葉県 南房総市, コテージ&#10;千葉県 千葉市, 古着屋, アパレル"></textarea>
-      <div class="v3-helper">ここに入力がある場合は、単発取得より一括取得を優先します。</div>
+      <h3>2. 取得ジャンル</h3>
+      <div class="v3-genres-actions">
+        <button type="button" id="v3-genre-all" class="v3-btn-sm">全選択</button>
+        <button type="button" id="v3-genre-clear" class="v3-btn-sm">全解除</button>
+        <span class="v3-summary" id="v3-genre-summary"></span>
+      </div>
+      <div id="v3-genres-container" class="v3-genres-container"></div>
+      <div class="v3-helper">カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥のみ取得します。</div>
     </section>
 
     <section class="v3-panel">

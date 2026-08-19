@@ -16,6 +16,16 @@ test('Google Maps genre master contains exactly the focused six genres', () => {
   assert.equal(config.version, '5.0');
 });
 
+test('Google Maps popup uses focused genre selection UI', () => {
+  const manifest = JSON.parse(read('extensions/google-maps-scraper/manifest.json'));
+  const popupHtml = read('extensions/google-maps-scraper/popup-v3.html');
+  const popupJs = read('extensions/google-maps-scraper/popup-v3.js');
+  assert.equal(manifest.version, '5.1.0');
+  assert.match(popupHtml, /id="v3-genres-container"/);
+  assert.doesNotMatch(popupHtml, /id="v3-keyword-input"/);
+  assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
+});
+
 test('Tabelog crawl is limited to five source categories producing six final genres', () => {
   const popup = read('extensions/restaurant-data-scraper_v3.0.0/src/popup.js');
   const offscreen = read('extensions/restaurant-data-scraper_v3.0.0/src/offscreen.js');

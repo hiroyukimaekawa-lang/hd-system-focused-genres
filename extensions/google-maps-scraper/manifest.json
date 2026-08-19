@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HD Google Maps Scraper - 飲食6ジャンル限定版",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "カフェ・スイーツ・居酒屋・スナック・バー・焼き鳥に限定したGoogleマップ営業リスト取得拡張機能",
   "permissions": [
     "activeTab",
