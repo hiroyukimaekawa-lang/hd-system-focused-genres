@@ -27,8 +27,10 @@ test('Google Maps popup uses focused genre selection UI', () => {
 });
 
 test('Tabelog crawl is limited to five source categories producing six final genres', () => {
+  const manifest = JSON.parse(read('extensions/restaurant-data-scraper_v3.0.0/manifest.json'));
   const popup = read('extensions/restaurant-data-scraper_v3.0.0/src/popup.js');
   const offscreen = read('extensions/restaurant-data-scraper_v3.0.0/src/offscreen.js');
+  assert.equal(manifest.version, '4.1.0');
   assert.match(popup, /const HD_POPULAR_GENRES = \['カフェ', 'スイーツ', '居酒屋', 'バー・お酒', '焼き鳥'\]/);
   assert.match(offscreen, /const FINAL_GENRE_LIST = \['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥'\]/);
   assert.match(offscreen, /genre: isValidFinalGenre\(r\.genre\) \? r\.genre : mapToFinalGenre\(name\)/);

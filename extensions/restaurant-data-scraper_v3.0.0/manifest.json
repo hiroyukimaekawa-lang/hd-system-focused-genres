@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HD 食べログスクレイパー - 飲食6ジャンル限定版",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "食べログから飲食6ジャンルの店舗情報を取得してCSVダウンロード",
   "permissions": [
     "activeTab",
