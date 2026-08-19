@@ -1463,7 +1463,7 @@ function mapToFinalGenre(rawCategoryName) {
   return raw;
 }
 
-// 本派生版の最終出力ジャンル。美容院はHot Pepper Beauty専用拡張が担当する。
+// 本派生版の最終出力ジャンル。
 const FINAL_GENRE_LIST = ['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥'];
 function isValidFinalGenre(genre) {
   return FINAL_GENRE_LIST.indexOf(String(genre || '').trim()) !== -1;
@@ -1472,7 +1472,7 @@ function isValidFinalGenre(genre) {
 // 生ジャンルから統一ジャンルが決まらなかった場合に店名から優先的に拾うジャンルキーワード。
 // 具体的な複合語ほど誤爆しにくいので先に判定させる。実データで「カフェ」検索時に
 // ラーメン屋・うどん屋等が検索語のままカフェに確定してしまう不具合を確認済みのための対応。
-// GAS/google-maps-scraper-cookingと同じ内容にしておくこと。
+// GAS/Google Maps限定版と同じ判定方針にしておくこと。
 const NAME_GENRE_PRIORITY_LIST = [
   ['中華そば', 'ラーメン'],
   ['油そば', 'ラーメン'],

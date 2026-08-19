@@ -42,8 +42,7 @@ test('Tabelog crawl is limited to five source categories producing six final gen
 test('all extension manifests are valid Manifest V3 JSON', () => {
   for (const path of [
     'extensions/hd-maps-6genres/manifest.json',
-    'extensions/hd-tabelog-6genres/manifest.json',
-    'extensions/hd-hpb-beauty/manifest.json'
+    'extensions/hd-tabelog-6genres/manifest.json'
   ]) {
     const manifest = JSON.parse(read(path));
     assert.equal(manifest.manifest_version, 3, path);
@@ -57,19 +56,12 @@ test('Tabelog extension does not claim Hot Pepper Gourmet', () => {
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://tabelog.com/*']);
 });
 
-test('CSV headers remain compatible across all three scrapers', () => {
+test('CSV headers remain compatible across both focused scrapers', () => {
   for (const path of [
     'extensions/hd-maps-6genres/background.js',
-    'extensions/hd-tabelog-6genres/src/background.js',
-    'extensions/hd-hpb-beauty/src/background.js'
+    'extensions/hd-tabelog-6genres/src/background.js'
   ]) {
     const source = read(path);
     for (const header of csvHeaders) assert.ok(source.includes(`'${header}'`), `${path}: ${header}`);
   }
-});
-
-test('Hot Pepper Beauty emits only the beauty-salon genre', () => {
-  const source = read('extensions/hd-hpb-beauty/src/offscreen.js');
-  assert.match(source, /genre: '美容院'/);
-  assert.doesNotMatch(source, /genre: 'ヘアサロン'/);
 });

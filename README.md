@@ -1,6 +1,6 @@
 # HD取得ジャンル限定版 (hd-system-focused-genres)
 
-このリポジトリは `hd-system` から派生した、取得対象を7ジャンルに限定する運用版です。元リポジトリの取得項目、CSV列順、GAS・後工程との互換性を維持し、対象ジャンルだけを絞っています。
+このリポジトリは `hd-system` から派生した、飲食6ジャンル限定のGoogle Maps版と食べログ版を配布する運用リポジトリです。元リポジトリの取得項目、CSV列順、GAS・後工程との互換性を維持し、対象ジャンルだけを絞っています。
 
 ## 媒体ごとの担当ジャンル
 
@@ -8,7 +8,6 @@
 |---|---|
 | Google Maps | カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥 |
 | 食べログ | カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥 |
-| Hot Pepper Beauty | 美容院 |
 
 食べログでは「バー・お酒」カテゴリを巡回し、店舗名または取得元ジャンルに明示的なスナック表記がある店舗だけを「スナック」に分類します。「バー・お酒」全体をスナック扱いにはしません。
 
@@ -16,7 +15,6 @@
 
 - Google Maps限定版: `extensions/hd-maps-6genres/`
 - 食べログ限定版: `extensions/hd-tabelog-6genres/`
-- Hot Pepper Beauty美容院限定版: `extensions/hd-hpb-beauty/`
 
 各ディレクトリをChromeの「パッケージ化されていない拡張機能を読み込む」から指定してください。
 
@@ -45,8 +43,7 @@ hd-system/
 │   └── assets/             # ポータル用静的アセット
 ├── extensions/             # Chrome拡張機能モジュール
 │   ├── hd-maps-6genres/          # 【限定版】Google Maps 飲食6ジャンル
-│   ├── hd-tabelog-6genres/       # 【限定版】食べログ 飲食6ジャンル
-│   └── hd-hpb-beauty/            # 【限定版】Hot Pepper Beauty 美容院
+│   └── hd-tabelog-6genres/       # 【限定版】食べログ 飲食6ジャンル
 ├── gas/                    # Google Apps Script コード・テンプレート
 │   └── list-normalizer/    # CSV統合・重複排除・チェーン除外・CSV生成GAS
 │       ├── README.md

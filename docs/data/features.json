@@ -373,33 +373,5 @@
       "要件整理中"
     ],
     "highlights": []
-  },
-  {
-    "id": "hotpepper-beauty-scraper",
-    "name": "ホットペッパービューティー美容院データ取得拡張機能",
-    "category": "データ取得",
-    "status": "改善中",
-    "summary": "ホットペッパービューティーから美容院・ヘアサロン情報を取得するChrome拡張機能。",
-    "targetUsers": ["リスト作成担当", "IS", "事業責任者"],
-    "useCase": "美容院・ヘアサロン向け営業リスト作成",
-    "inputs": ["検索一覧URL", "最大取得件数"],
-    "outputs": ["CSV"],
-    "notes": [
-      "ジャンルはヘアサロンに統一する",
-      "先頭19列は飲食店データと同じCSV形式にする",
-      "媒体はホットペッパービューティーにする",
-      "公式HPの有無は媒体ページの有無とは分けて判定する"
-    ],
-    "links": {
-      "github": "extensions/hd-hpb-beauty/",
-      "requirements": "requirements/hotpepper-beauty-scraper-review.md"
-    },
-    "lastUpdated": "2026-06-29",
-    "roadmap": [
-      "ジャンルのヘアサロン統一",
-      "営業日生成ロジック修正",
-      "STOP時保存・ダウンロード改善",
-      "HDシステム格納"
-    ]
   }
 ]
