@@ -1,7 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "HD Google Maps Scraper - 飲食6ジャンル限定版",
-  "version": "5.1.0",
+  "name": "HD Maps 飲食6ジャンル限定版",
+  "short_name": "HD Maps 6ジャンル",
+  "version": "5.1.1",
   "description": "カフェ・スイーツ・居酒屋・スナック・バー・焼き鳥に限定したGoogleマップ営業リスト取得拡張機能",
   "permissions": [
     "activeTab",
@@ -19,6 +20,7 @@
     "https://www.google.co.jp/maps/*"
   ],
   "action": {
+    "default_title": "HD Maps 飲食6ジャンル限定版",
     "default_popup": "popup-v3.html",
     "default_icon": {
       "16": "icons/icon16.png",

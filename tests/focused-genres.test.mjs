@@ -20,7 +20,9 @@ test('Google Maps popup uses focused genre selection UI', () => {
   const manifest = JSON.parse(read('extensions/google-maps-scraper/manifest.json'));
   const popupHtml = read('extensions/google-maps-scraper/popup-v3.html');
   const popupJs = read('extensions/google-maps-scraper/popup-v3.js');
-  assert.equal(manifest.version, '5.1.0');
+  assert.equal(manifest.version, '5.1.1');
+  assert.equal(manifest.name, 'HD Maps 飲食6ジャンル限定版');
+  assert.equal(manifest.action.default_title, 'HD Maps 飲食6ジャンル限定版');
   assert.match(popupHtml, /id="v3-genres-container"/);
   assert.doesNotMatch(popupHtml, /id="v3-keyword-input"/);
   assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
