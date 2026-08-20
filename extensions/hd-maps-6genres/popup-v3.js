@@ -37,7 +37,7 @@ const OUTPUT_HEADERS = [
 
 document.addEventListener('DOMContentLoaded', () => {
   const elCity = document.getElementById('v3-city-input');
-  const elAreaGroup = document.getElementById('v3-area-group-select');
+  const btnFetchAreas = document.getElementById('v3-fetch-areas');
   const elGenresContainer = document.getElementById('v3-genres-container');
   const elGenreSummary = document.getElementById('v3-genre-summary');
   const btnGenreAll = document.getElementById('v3-genre-all');
@@ -74,18 +74,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const storageSet = (obj) => new Promise(resolve => chrome.storage.local.set(obj, resolve));
   let availableAreas = [];
   let selectedAreas = [];
-  let areaGroups = [];
   let availableGenres = [];
   let selectedGenres = [];
-  let areaLoadTimer = null;
+  let fetchedAreaInput = '';
 
   const normalizeAreaText = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
-  const isPrefectureOnlyArea = value => /^(?:北海道|東京都|大阪府|京都府|.{2,3}県)$/.test(normalizeAreaText(value));
-  const isRegisteredAreaGroup = value => {
-    const normalized = normalizeAreaText(value);
-    return areaGroups.some(group => normalizeAreaText(group) === normalized);
-  };
-  const shouldLoadAreaList = value => isPrefectureOnlyArea(value) || isRegisteredAreaGroup(value);
   const composeSelectedArea = (baseArea, selectedArea) => {
     const base = String(baseArea || '').trim();
     const selected = String(selectedArea || '').trim();
@@ -110,26 +103,26 @@ document.addEventListener('DOMContentLoaded', () => {
       elMaxRange.value = stored[V3K.maxItems];
       elMaxVal.textContent = stored[V3K.maxItems];
     }
-    await loadAreaGroups();
     await loadGenres();
-    syncAreaGroupSelect();
-    await loadAreasForInput();
     refreshStatus(true);
     setInterval(refreshStatus, 1000);
   })();
 
-  elCity.addEventListener('input', () => storageSet({ [V3K.city]: elCity.value.trim() }));
   elCity.addEventListener('input', () => {
-    syncAreaGroupSelect();
-    clearTimeout(areaLoadTimer);
-    areaLoadTimer = setTimeout(loadAreasForInput, 250);
-  });
-  elAreaGroup.addEventListener('change', () => {
-    if (!elAreaGroup.value) return;
-    elCity.value = elAreaGroup.value;
+    storageSet({ [V3K.city]: elCity.value.trim() });
+    fetchedAreaInput = '';
+    availableAreas = [];
     selectedAreas = [];
-    storageSet({ [V3K.city]: elCity.value.trim(), [V3K.selectedAreas]: selectedAreas });
-    loadAreasForInput();
+    elAreaPicker.hidden = true;
+    persistSelectedAreas();
+    renderAreaCheckboxes();
+  });
+  btnFetchAreas.addEventListener('click', loadAreasForInput);
+  elCity.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      loadAreasForInput();
+    }
   });
   btnAreaAll.addEventListener('click', () => {
     selectedAreas = availableAreas.slice();
@@ -189,31 +182,20 @@ document.addEventListener('DOMContentLoaded', () => {
     elGenreSummary.textContent = `${selectedGenres.length} / ${availableGenres.length} 選択`;
   }
 
-  async function loadAreaGroups() {
-    const res = await sendMsg({ action: 'v3_getAreaGroups' });
-    areaGroups = res && res.ok && Array.isArray(res.groups) ? res.groups : [];
-    elAreaGroup.innerHTML = '<option value="">地域を選択</option>' + areaGroups
-      .map(group => `<option value="${escapeHtml(group)}">${escapeHtml(group)}</option>`)
-      .join('');
-  }
-
-  function syncAreaGroupSelect() {
-    const normalized = normalizeAreaText(elCity.value);
-    const matched = areaGroups.find(group => normalizeAreaText(group) === normalized);
-    elAreaGroup.value = matched || '';
-  }
-
   async function loadAreasForInput() {
     const area = elCity.value.trim();
-    if (!shouldLoadAreaList(area)) {
-      availableAreas = [];
-      elAreaPicker.hidden = true;
-      renderAreaCheckboxes();
-      return;
-    }
+    if (!area) { alert('市名を入力してください'); return; }
 
     const res = await sendMsg({ action: 'v3_getAreas', city: area });
     availableAreas = res && res.ok && Array.isArray(res.areas) ? res.areas : [];
+    if (!availableAreas.length) {
+      fetchedAreaInput = '';
+      elAreaPicker.hidden = true;
+      renderAreaCheckboxes();
+      alert('エリアを取得できませんでした。「市」を含めて入力してください。');
+      return;
+    }
+    fetchedAreaInput = normalizeAreaText(area);
     selectedAreas = selectedAreas.filter(areaName => availableAreas.includes(areaName));
     if (!selectedAreas.length && availableAreas.length) {
       selectedAreas = availableAreas.slice();
@@ -230,7 +212,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderAreaCheckboxes() {
     if (!availableAreas.length) {
       elAreasContainer.className = 'v3-areas-container empty';
-      elAreasContainer.innerHTML = '<span class="v3-empty">登録地域を選ぶと市町村を選べます。</span>';
+      elAreasContainer.innerHTML = '<span class="v3-empty">市名を入力して「区を取得」を押してください。</span>';
       elAreaSummary.textContent = '';
       return;
     }
@@ -259,12 +241,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const area = elCity.value.trim();
     if (!area) { alert('エリアを入力してください'); return; }
     if (!selectedGenres.length) { alert('取得するジャンルを選択してください'); return; }
-    if (shouldLoadAreaList(area) && !availableAreas.length) await loadAreasForInput();
-    let targetAreas = [area];
-    if (shouldLoadAreaList(area) && availableAreas.length) {
-      if (!selectedAreas.length) { alert('取得する市町村を選択してください'); return; }
-      targetAreas = selectedAreas.map(areaName => composeSelectedArea(area, areaName));
-    }
+    if (normalizeAreaText(area) !== fetchedAreaInput) { alert('先に「区を取得」を押してください'); return; }
+    if (!selectedAreas.length) { alert('取得するエリアを選択してください'); return; }
+    const targetAreas = selectedAreas.map(areaName => composeSelectedArea(area, areaName));
     const tasks = targetAreas.flatMap(targetArea => selectedGenres.map(genre => ({
       area: targetArea,
       keyword: genre,

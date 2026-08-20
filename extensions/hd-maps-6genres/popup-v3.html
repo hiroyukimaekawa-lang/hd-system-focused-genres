@@ -14,20 +14,14 @@
 
     <section class="v3-panel">
       <h3>1. 地域を選択</h3>
-      <div class="v3-form-row v3-stack">
-        <label class="v3-label" for="v3-area-group-select">登録地域</label>
-        <select id="v3-area-group-select" class="v3-input">
-          <option value="">地域を選択</option>
-        </select>
+      <div class="v3-form-row">
+        <input type="text" id="v3-city-input" class="v3-input" placeholder="例: 福岡市">
+        <button type="button" id="v3-fetch-areas" class="v3-btn v3-btn-primary">区を取得</button>
       </div>
-      <div class="v3-form-row v3-stack">
-        <label class="v3-label" for="v3-city-input">地域名</label>
-        <input type="text" id="v3-city-input" class="v3-input" placeholder="例: 千葉県">
-      </div>
-      <div class="v3-helper">登録地域を選ぶと市町村一覧が表示されます。</div>
+      <div class="v3-helper">※「市」を含めて入力してください。例: さいたま市、福岡市</div>
       <div id="v3-area-picker" class="v3-area-picker" hidden>
         <div class="v3-area-picker-head">
-          <span class="v3-label">取得する市町村</span>
+          <span class="v3-label">取得対象エリア</span>
           <span class="v3-summary" id="v3-area-summary"></span>
         </div>
         <div class="v3-areas-actions">
@@ -35,7 +29,7 @@
           <button type="button" id="v3-area-clear" class="v3-btn-sm">全解除</button>
         </div>
         <div id="v3-areas-container" class="v3-areas-container empty">
-          <span class="v3-empty">登録地域を選ぶと市町村を選べます。</span>
+          <span class="v3-empty">市名を入力して「区を取得」を押してください。</span>
         </div>
       </div>
     </section>

@@ -20,10 +20,13 @@ test('Google Maps popup uses focused genre selection UI', () => {
   const manifest = JSON.parse(read('extensions/hd-maps-6genres/manifest.json'));
   const popupHtml = read('extensions/hd-maps-6genres/popup-v3.html');
   const popupJs = read('extensions/hd-maps-6genres/popup-v3.js');
-  assert.equal(manifest.version, '5.2.0');
+  assert.equal(manifest.version, '5.3.0');
   assert.equal(manifest.name, '【限定版】HD Maps 6ジャンル');
   assert.equal(manifest.action.default_title, '【限定版】HD Maps 6ジャンル');
   assert.match(popupHtml, /id="v3-genres-container"/);
+  assert.match(popupHtml, /id="v3-fetch-areas"/);
+  assert.match(popupHtml, />区を取得</);
+  assert.doesNotMatch(popupHtml, /id="v3-area-group-select"/);
   assert.doesNotMatch(popupHtml, /id="v3-keyword-input"/);
   assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
 });
