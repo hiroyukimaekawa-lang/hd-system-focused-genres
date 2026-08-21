@@ -241,8 +241,20 @@ async function appendV3Log(message) {
     logs.push(entry);
     if (logs.length > 500) logs.splice(0, logs.length - 500);
     await chrome.storage.local.set({ v3_logs: logs });
-    chrome.runtime.sendMessage({ action: 'v3_logPush', entry }).catch(() => { });
+    await safeRuntimeSendMessage({ action: 'v3_logPush', entry });
   } catch (_) { }
+}
+
+async function safeRuntimeSendMessage(message) {
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    const text = String(error?.message || error || '');
+    if (!text.includes('Receiving end does not exist') && !text.includes('Could not establish connection')) {
+      console.warn('[runtime message]', error);
+    }
+    return null;
+  }
 }
 
 async function downloadCsvFile(data, filename) {
@@ -251,11 +263,14 @@ async function downloadCsvFile(data, filename) {
 }
 
 function safeTabSendMessage(tabId, message) {
-  try {
-    chrome.tabs.sendMessage(tabId, message, () => {
-      if (chrome.runtime.lastError) { /* Receiving end does not exist */ }
-    });
-  } catch (_) { /* ignore */ }
+  return new Promise(resolve => {
+    try {
+      chrome.tabs.sendMessage(tabId, message, response => {
+        if (chrome.runtime.lastError) return resolve(null);
+        resolve(response || null);
+      });
+    } catch (_) { resolve(null); }
+  });
 }
 
 // =====================================================================
@@ -264,7 +279,7 @@ function safeTabSendMessage(tabId, message) {
 async function handleAutomaticDownload(tabId, data, filterConfig) {
   let query = '';
   try {
-    const res = await chrome.tabs.sendMessage(tabId, { action: 'getQuery' });
+    const res = await safeTabSendMessage(tabId, { action: 'getQuery' });
     query = res?.query || '';
   } catch (e) { /* ignore */ }
 
@@ -311,7 +326,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const unique = incoming.filter(i => i?.url && !existingUrls.has(i.url));
       const updated = [...current, ...unique];
 
-      chrome.storage.local.set({ scrapedData: updated }, () => {
+      chrome.storage.local.set({ scrapedData: updated, lastActivityAt: Date.now() }, () => {
         sendResponse({ success: true, count: updated.length });
       });
     });
@@ -319,7 +334,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'setState') {
-    chrome.storage.local.set({ scrapingState: request.state }, async () => {
+    chrome.storage.local.set({
+      scrapingState: request.state,
+      scrapingComboId: request.comboId || '',
+      lastActivityAt: Date.now(),
+      ...(request.error ? { scrapingError: request.error } : {})
+    }, async () => {
       if (request.state === 'active') {
         chrome.power.requestKeepAwake('display');
         chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });

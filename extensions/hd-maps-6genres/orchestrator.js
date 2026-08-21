@@ -76,6 +76,18 @@ function safeTabSendMessage(tabId, message) {
   });
 }
 
+async function safeRuntimeSendMessage(message) {
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    const text = String(error?.message || error || '');
+    if (!text.includes('Receiving end does not exist') && !text.includes('Could not establish connection')) {
+      console.warn('[runtime message]', error);
+    }
+    return null;
+  }
+}
+
 function v3Timestamp() {
   const d = new Date();
   const z = n => String(n).padStart(2, '0');
@@ -88,7 +100,7 @@ async function v3Log(message) {
   logs.push({ t: v3Timestamp(), msg: message });
   if (logs.length > V3_LOG_MAX) logs.splice(0, logs.length - V3_LOG_MAX);
   await v3Set({ [V3K.logs]: logs });
-  try { chrome.runtime.sendMessage({ action: 'v3_logPush', entry: logs[logs.length - 1] }); } catch (_) { }
+  await safeRuntimeSendMessage({ action: 'v3_logPush', entry: logs[logs.length - 1] });
 }
 
 // ---- offscreen document ------------------------------------
@@ -331,34 +343,56 @@ async function navigateTabTo(tabId, url) {
 async function waitForContentScript(tabId, retryMs = 12000, intervalMs = 150) {
   const deadline = Date.now() + retryMs;
   while (Date.now() < deadline) {
-    try {
-      const res = await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tabId, { action: 'ping' }, resp => {
-          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-          else resolve(resp);
-        });
-      });
-      if (res && res.alive) return true;
-    } catch (_) {
-      // content.js 未注入 or SW との接続なし → [SPEED-2] 200ms 待って再試行
-    }
+    const res = await safeTabSendMessage(tabId, { action: 'ping' });
+    if (res?.alive) return true;
     await new Promise(r => setTimeout(r, intervalMs));
   }
   return false;
 }
 
 // ---- [FIX-2] waitForComboDone: 無進捗タイムアウト付き ----------
-function waitForComboDone(area, genre, tabId, timeoutMs = 1800000, runOptions = {}) { // 30分
+function waitForComboDone(area, genre, tabId, comboId, timeoutMs = 1800000, runOptions = {}) { // 30分
   return new Promise(resolve => {
     const areaLabel = areaDisplayName(area);
     let lastReportedCount = 0;
     let timedOut = false;
     let timeoutTimer = null;
+    let settled = false;
+
+    const isCurrentCombo = value => value === comboId;
+
+    const finish = async state => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      chrome.storage.onChanged.removeListener(handler);
+      const r = await v3Get(['scrapedData', 'scrapingComboId', V3K.collected]);
+      if (!isCurrentCombo(r.scrapingComboId)) return;
+      const fresh = Array.isArray(r.scrapedData) ? r.scrapedData : [];
+      const collected = Array.isArray(r[V3K.collected]) ? r[V3K.collected] : [];
+      const enriched = fresh.map(it => ({
+        ...it,
+        searchGenre: it.searchGenre || genre,
+        outputGenre: it.outputGenre || runOptions.outputGenre || '',
+        area: areaLabel,
+        searchArea: areaLabel,
+        searchQuery: it.searchQuery || buildGoogleMapsSearchQuery(area, genre),
+        subArea: it.subArea || area.subAreaLabel || area.subArea || '',
+        rangeMode: it.rangeMode || area.rangeMode || ''
+      }));
+      const merged = collected.concat(enriched);
+      await v3Set({ [V3K.collected]: merged });
+      const statusLabel = state === 'stopped_by_user' ? 'ユーザー停止' : state === 'error' ? 'エラー終了' : '完了';
+      await v3Log(`${genre} ${statusLabel} (本コンボ ${enriched.length}件 / 累計 ${merged.length}件)`);
+      await safeRuntimeSendMessage({ action: 'v3_progress' });
+      resolve(enriched);
+    };
 
     const resetTimeout = () => {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       timeoutTimer = setTimeout(async () => {
         timedOut = true;
+        settled = true;
         chrome.storage.onChanged.removeListener(handler);
         await safeTabSendMessage(tabId, { action: 'stopScraping' });
         await v3Log(`⚠ ${areaLabel} ${genre} タイムアウト（30分間完了通知なし）`);
@@ -368,6 +402,8 @@ function waitForComboDone(area, genre, tabId, timeoutMs = 1800000, runOptions = 
 
     const handler = async (changes, ns) => {
       if (ns !== 'local' || timedOut) return;
+
+      if (changes.lastActivityAt) resetTimeout();
 
       if (changes.scrapingState && changes.scrapingState.newValue === 'active') {
         resetTimeout();
@@ -380,40 +416,25 @@ function waitForComboDone(area, genre, tabId, timeoutMs = 1800000, runOptions = 
         if (newVal.length !== lastReportedCount) {
           lastReportedCount = newVal.length;
           await v3Log(`取得件数 ${newVal.length}件`);
-          chrome.runtime.sendMessage({ action: 'v3_progress' }).catch(() => { });
+          await safeRuntimeSendMessage({ action: 'v3_progress' });
         }
       }
 
       // 完了通知 / ユーザー停止通知
-      if (changes.scrapingState && ['done', 'stopped_by_user'].includes(changes.scrapingState.newValue)) {
-        clearTimeout(timeoutTimer);
-        chrome.storage.onChanged.removeListener(handler);
-
-        const r = await v3Get(['scrapedData', V3K.collected]);
-        const fresh = Array.isArray(r.scrapedData) ? r.scrapedData : [];
-        const collected = Array.isArray(r[V3K.collected]) ? r[V3K.collected] : [];
-
-        const enriched = fresh.map(it => ({
-          ...it,
-          searchGenre: it.searchGenre || genre,
-          outputGenre: it.outputGenre || runOptions.outputGenre || '',
-          area: areaLabel,
-          searchArea: areaLabel,
-          searchQuery: it.searchQuery || buildGoogleMapsSearchQuery(area, genre),
-          subArea: it.subArea || area.subAreaLabel || area.subArea || '',
-          rangeMode: it.rangeMode || area.rangeMode || ''
-        }));
-        const merged = collected.concat(enriched);
-        await v3Set({ [V3K.collected]: merged });
-        const statusLabel = changes.scrapingState.newValue === 'stopped_by_user' ? 'ユーザー停止' : '完了';
-        await v3Log(`${genre} ${statusLabel} (本コンボ ${enriched.length}件 / 累計 ${merged.length}件)`);
-        chrome.runtime.sendMessage({ action: 'v3_progress' }).catch(() => { });
-        resolve(enriched);
+      if (changes.scrapingState && ['done', 'stopped_by_user', 'error'].includes(changes.scrapingState.newValue)) {
+        const current = await v3Get(['scrapingComboId']);
+        if (isCurrentCombo(current.scrapingComboId)) await finish(changes.scrapingState.newValue);
       }
     };
 
     resetTimeout();
     chrome.storage.onChanged.addListener(handler);
+    v3Get(['scrapingState', 'scrapedData', 'scrapingComboId', 'lastActivityAt']).then(current => {
+      if (isCurrentCombo(current.scrapingComboId) && ['done', 'stopped_by_user', 'error'].includes(current.scrapingState)) {
+        return finish(current.scrapingState);
+      }
+      if (isCurrentCombo(current.scrapingComboId) && current.lastActivityAt) resetTimeout();
+    });
   });
 }
 
@@ -476,6 +497,7 @@ async function runCombo(area, genre, runOptions = {}) {
   const scrapeMode = normalizeScrapeMode(runOptions.scrapeMode);
   const rangeMode = normalizeRangeMode(runOptions.rangeMode || targetArea.rangeMode);
   const modeConfig = V3_MODE_CONFIG[scrapeMode];
+  const comboId = `${Date.now()}_${areaLabel}_${searchKeyword}_${Math.random().toString(36).slice(2, 8)}`;
   const hasSearchArea = !!(targetArea.prefecture || targetArea.city);
   if (!hasSearchArea || !searchKeyword || (targetArea.subArea && !targetArea.prefecture)) {
     await v3Log(`⚠ ${areaLabel || '-'} ${searchKeyword || '-'} 検索条件が不完全なためスキップ`);
@@ -496,7 +518,9 @@ async function runCombo(area, genre, runOptions = {}) {
     [V3K.currentUrl]: url,
     [V3K.comboStart]: Date.now(),
     scrapedData: [],
-    scrapingState: 'inactive'
+    scrapingState: 'inactive',
+    scrapingComboId: comboId,
+    lastActivityAt: Date.now()
   });
 
   await v3Log(`${keyword} 開始`);
@@ -522,11 +546,13 @@ async function runCombo(area, genre, runOptions = {}) {
   const modeMax = rangeMode === 'whole' ? modeConfig.cityMax : modeConfig.subAreaMax;
   const maxItems = storedMax === 0 ? 0 : Math.min(Number(storedMax ?? modeMax), modeMax);
 
+  const comboDonePromise = waitForComboDone(targetArea, searchKeyword, tabId, comboId, modeConfig.timeoutMs, { outputGenre });
+
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      await new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(tabId, {
+      const response = await safeTabSendMessage(tabId, {
           action: 'startScraping',
+          comboId,
           maxItems,
           targetGenres: [],
           filterConfig: { enabled: false },
@@ -548,11 +574,21 @@ async function runCombo(area, genre, runOptions = {}) {
             subAreaLabel: targetArea.subAreaLabel || '',
             targetZoom: areaCoords ? V3_LOCAL_SEARCH_ZOOM : null
           }
-        }, response => {
-          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
-          else resolve(response);
-        });
       });
+      if (response?.success !== true) {
+        const reason = response?.reason || 'no response';
+        if (reason === 'already running') {
+          await v3Log(`⚠ ${keyword} は既存処理を検出。停止確認後に再開します`);
+          await safeTabSendMessage(tabId, { action: 'stopScraping' });
+          const deadline = Date.now() + 15000;
+          while (Date.now() < deadline) {
+            const state = await v3Get(['scrapingState']);
+            if (state.scrapingState !== 'active') break;
+            await new Promise(r => setTimeout(r, 150));
+          }
+        }
+        throw new Error(`startScraping rejected: ${reason}`);
+      }
       break; // 成功したらループを抜ける
     } catch (e) {
       await v3Log(`⚠ ${keyword} startScraping 失敗(試行${attempt}): ${e?.message || e}`);
@@ -564,12 +600,14 @@ async function runCombo(area, genre, runOptions = {}) {
           return { count: 0, items: [] };
         }
       } else {
+        await v3Set({ scrapingState: 'error', scrapingComboId: comboId, lastActivityAt: Date.now() });
+        await comboDonePromise;
         return { count: 0, items: [] };
       }
     }
   }
 
-  const items = await waitForComboDone(targetArea, searchKeyword, tabId, modeConfig.timeoutMs, { outputGenre });
+  const items = await comboDonePromise;
   return { count: items.length, items };
 }
 
@@ -648,13 +686,13 @@ async function v3Drive() {
         if (taskItems.length) {
           const safeArea = String(task.area || 'area').replace(/[\\/:*?"<>|\s]+/g, '_');
           const safeGenre = String(task.outputGenre || task.keyword || 'genre').replace(/[\\/:*?"<>|\s]+/g, '_');
-          chrome.runtime.sendMessage({
+          await safeRuntimeSendMessage({
             action: 'triggerV3GenreDownload',
             downloadId: `${runId || 'v3'}_task_${taskIdx}_${safeArea}_${safeGenre}`,
             area: task.area || cityForDownload,
             genre: task.outputGenre || task.keyword || '',
             data: taskItems
-          }).catch(() => {});
+          });
           await v3Log(`⬇ ${task.area || '-'} ${task.outputGenre || task.keyword || '-'} CSVを出力しました (${taskItems.length}件)`);
         }
         taskIdx++;
@@ -665,7 +703,7 @@ async function v3Drive() {
       await v3Set({ [V3K.state]: 'done' });
       await v3Log(`🎉 任意キーワード取得完了`);
       await v3Log(`全件を再出力する場合はCSVボタンを押してください`);
-      chrome.runtime.sendMessage({ action: 'v3_done' }).catch(() => {});
+      await safeRuntimeSendMessage({ action: 'v3_done' });
       await closeOffscreen();
       return;
     }
@@ -694,13 +732,13 @@ async function v3Drive() {
             unique.push(item);
           }
           const downloadId = `${runId || 'v3'}_${genreIdx}_${genre}_complete`;
-          chrome.runtime.sendMessage({
+          await safeRuntimeSendMessage({
             action: 'triggerV3GenreDownload',
             downloadId,
             area: cityForDownload,
             genre,
             data: unique
-          }).catch(() => { });
+          });
           await v3Log(`⬇ ${genre} CSVを出力しました (${unique.length}件)`);
         } else {
           await v3Log(`⬇ ${genre} CSV出力対象なし`);
@@ -745,7 +783,7 @@ async function v3Drive() {
 
     await v3Set({ [V3K.state]: 'done' });
     await v3Log(`🎉 全エリア × 全ジャンル 取得完了`);
-    chrome.runtime.sendMessage({ action: 'v3_done' }).catch(() => { });
+    await safeRuntimeSendMessage({ action: 'v3_done' });
     await closeOffscreen();
 
   } catch (e) {
@@ -763,6 +801,7 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
 
   if (req.action === 'v3_contentLog') {
     (async () => {
+      await v3Set({ lastActivityAt: Date.now() });
       await v3Log(req.message || '');
       sendResponse({ ok: true });
     })();
@@ -904,13 +943,13 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
       const collected = Array.isArray(stopR[V3K.collected]) ? stopR[V3K.collected] : [];
       const genreItems = currentGenre ? collected.filter(item => item.searchGenre === currentGenre) : collected;
       if (stopR.v3_runId && genreItems.length) {
-        chrome.runtime.sendMessage({
+        await safeRuntimeSendMessage({
           action: 'triggerV3GenreDownload',
           downloadId: `${stopR.v3_runId}_stopped_${currentGenre || 'all'}`,
           area: stopR[V3K.city] || '',
           genre: currentGenre,
           data: genreItems
-        }).catch(() => {});
+        });
       }
 
       sendResponse({ ok: true });

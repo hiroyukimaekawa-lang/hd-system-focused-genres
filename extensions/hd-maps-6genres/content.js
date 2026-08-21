@@ -1430,6 +1430,7 @@ function matchesSearchArea(detail, searchArea) {
 let isScrapingActive = false;
 let stopRequested = false;
 let currentFlushPromise = null;
+let currentComboId = '';
 
 async function flushBatch(pendingBatch) {
   if (!pendingBatch.length) return 0;
@@ -1512,11 +1513,8 @@ async function enforceMinZoom(targetZoom, maxAdjustSteps = 15) {
   reportV3Log(zoom !== null ? `🔍 縮尺補正完了: ${zoom}z` : '🔍 縮尺補正: URL取得不可のため確認できず');
 }
 
-async function startScraping(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}) {
-  isScrapingActive = true;
-  stopRequested = false;
+async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}) {
   searchPageUrl = window.location.href;
-  await reportState('active');
   const effectiveMaxItems = Number(maxItems) > 0 ? Number(maxItems) : Number.MAX_SAFE_INTEGER;
 
   const query = getCurrentQuery();
@@ -1535,8 +1533,6 @@ async function startScraping(maxItems, targetGenres = [], searchArea = '', searc
   let container = getScrollContainer();
   if (!container) {
     reportV3Log('エラー: コンテナが見つかりません');
-    isScrapingActive = false;
-    await reportState('done');
     return;
   }
 
@@ -2081,18 +2077,40 @@ async function startScraping(maxItems, targetGenres = [], searchArea = '', searc
 
   reportV3Log(buildSpeedSummary(speedStats, stopRequested ? 'ユーザー停止速度ログ' : 'コンボ完了速度ログ'));
 
-  isScrapingActive = false;
-  const finalState = stopRequested ? 'stopped_by_user' : 'done';
   if (stopRequested) {
     reportV3Log(`ユーザー停止: 取得済み${totalProcessed}件をCSV出力します`);
   }
-  await reportState(finalState);
 }
 
-async function reportState(state) {
+async function startScraping(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}, comboId = '') {
+  isScrapingActive = true;
+  stopRequested = false;
+  currentComboId = comboId || `legacy_${Date.now()}`;
+  let finalState = 'done';
+  let fatalError = null;
+  try {
+    await reportState('active');
+    await startScrapingCore(maxItems, targetGenres, searchArea, searchGenre, scrapeOptions);
+    finalState = stopRequested ? 'stopped_by_user' : 'done';
+  } catch (error) {
+    fatalError = error;
+    finalState = stopRequested ? 'stopped_by_user' : 'error';
+    console.error('[Scraper] 致命的エラー:', error);
+  } finally {
+    isScrapingActive = false;
+    await reportState(finalState, fatalError);
+  }
+}
+
+async function reportState(state, error = null) {
   return new Promise(r => {
     try {
-      chrome.runtime.sendMessage({ action: 'setState', state }, () => {
+      chrome.runtime.sendMessage({
+        action: 'setState',
+        state,
+        comboId: currentComboId,
+        error: error ? String(error?.message || error) : ''
+      }, () => {
         if (chrome.runtime.lastError) { }
         r();
       });
@@ -2117,12 +2135,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const incomingGenre   = typeof request.searchGenre === 'string' ? request.searchGenre.trim() : '';
     const incomingOptions = request.scrapeOptions && typeof request.scrapeOptions === 'object' ? request.scrapeOptions : {};
 
-    startScraping(request.maxItems ?? 50, incomingGenres, incomingArea, incomingGenre, incomingOptions).catch(err => {
-      console.error('[Scraper] 致命的エラー:', err);
-      isScrapingActive = false;
-      reportState(stopRequested ? 'stopped_by_user' : 'done');
-    });
-    sendResponse({ success: true });
+    startScraping(request.maxItems ?? 50, incomingGenres, incomingArea, incomingGenre, incomingOptions, request.comboId);
+    sendResponse({ success: true, comboId: request.comboId || '' });
     return false;
   }
 

@@ -78,3 +78,64 @@ test('CSV headers remain compatible across both focused scrapers', () => {
     for (const header of csvHeaders) assert.ok(source.includes(`'${header}'`), `${path}: ${header}`);
   }
 });
+
+test('Test A: completion watcher double-checks an already completed combo', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(source, /chrome\.storage\.onChanged\.addListener\(handler\);\s*v3Get\(\['scrapingState', 'scrapedData', 'scrapingComboId', 'lastActivityAt'\]\)/);
+  assert.match(source, /\['done', 'stopped_by_user', 'error'\]\.includes\(current\.scrapingState\)/);
+});
+
+test('Test B: completion watcher handles active to done storage events', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(source, /changes\.scrapingState\.newValue === 'active'/);
+  assert.match(source, /\['done', 'stopped_by_user', 'error'\]\.includes\(changes\.scrapingState\.newValue\)/);
+});
+
+test('Test C: startScraping handshake rejects already-running responses', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(source, /response\?\.success !== true/);
+  assert.match(source, /reason === 'already running'/);
+  assert.match(source, /action: 'stopScraping'/);
+});
+
+test('Test D/E: popup notification connection errors are safely consumed', () => {
+  for (const path of [
+    'extensions/hd-maps-6genres/orchestrator.js',
+    'extensions/hd-maps-6genres/background.js'
+  ]) {
+    const source = read(path);
+    assert.match(source, /async function safeRuntimeSendMessage/);
+    assert.match(source, /Receiving end does not exist/);
+    assert.match(source, /Could not establish connection/);
+  }
+  const orchestrator = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(orchestrator, /await safeRuntimeSendMessage\(\{ action: 'v3_progress' \}\)/);
+  assert.match(orchestrator, /await safeRuntimeSendMessage\(\{ action: 'v3_done' \}\)/);
+});
+
+test('Test F: content scraping always leaves active state through finally', () => {
+  const source = read('extensions/hd-maps-6genres/content.js');
+  assert.match(source, /async function startScraping[\s\S]*?try \{[\s\S]*?finally \{\s*isScrapingActive = false;\s*await reportState\(finalState, fatalError\)/);
+  assert.match(source, /finalState = stopRequested \? 'stopped_by_user' : 'error'/);
+});
+
+test('Test G: combo completion advances the next area and genre', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(source, /comboResult = await runCombo/);
+  assert.match(source, /areaIdx\+\+;\s*await v3Set\(\{ \[V3K\.areaIdx\]: areaIdx \}\)/);
+  assert.match(source, /genreIdx\+\+;\s*areaIdx = 0/);
+});
+
+test('Test H: all combos finish in v3 done state', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  assert.match(source, /await v3Set\(\{ \[V3K\.state\]: 'done' \}\);\s*await v3Log\(`🎉 全エリア × 全ジャンル 取得完了`\)/);
+});
+
+test('completion watcher is registered before startScraping and uses comboId heartbeat', () => {
+  const source = read('extensions/hd-maps-6genres/orchestrator.js');
+  const watcher = source.indexOf('const comboDonePromise = waitForComboDone');
+  const start = source.indexOf("action: 'startScraping'", watcher);
+  assert.ok(watcher > 0 && start > watcher);
+  assert.match(source, /scrapingComboId: comboId/);
+  assert.match(source, /lastActivityAt: Date\.now\(\)/);
+});
