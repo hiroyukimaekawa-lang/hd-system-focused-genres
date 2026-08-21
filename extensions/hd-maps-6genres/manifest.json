@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "【限定版】HD Maps 6ジャンル",
   "short_name": "HD Maps 6ジャンル",
-  "version": "5.3.1",
-  "description": "カフェ・スイーツ・居酒屋・スナック・バー・焼き鳥に限定したGoogleマップ営業リスト取得拡張機能",
+  "version": "3.1.0",
+  "description": "Googleマップからカフェ・スイーツ・居酒屋・スナック・バー・焼き鳥の店舗情報を取得する限定版",
   "permissions": [
     "activeTab",
     "scripting",
     "storage",
+    "unlimitedStorage",
     "notifications",
     "downloads",
     "power",
@@ -38,8 +39,7 @@
         "https://www.google.com/maps/*"
       ],
       "js": [
-        "content.js",
-        "integrity-guard.js"
+        "content.js"
       ]
     }
   ],

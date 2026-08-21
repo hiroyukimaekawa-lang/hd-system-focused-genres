@@ -14,67 +14,6 @@ function backgroundSleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-const NON_PLACE_TITLES = new Set(['結果', '検索結果', 'results', 'search results']);
-const DETAIL_ITEM_HARD_TIMEOUT_MS = 8000;
-
-function isUsablePlaceTitle(value) {
-  const title = String(value || '').normalize('NFKC').trim();
-  return !!title && !NON_PLACE_TITLES.has(title.toLowerCase());
-}
-
-function extractGooglePlaceIdentity(url) {
-  const text = String(url || '');
-  const placeMatch = text.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
-  if (placeMatch) return placeMatch[1].toLowerCase();
-  const matches = text.match(/0x[0-9a-f]+:0x[0-9a-f]+/ig);
-  return matches?.length ? matches[matches.length - 1].toLowerCase() : '';
-}
-
-function getDetailPanelContainer() {
-  const anchors = [
-    document.querySelector('button[data-item-id="address"]'),
-    document.querySelector('button[data-item-id^="phone:tel:"]'),
-    document.querySelector('button[data-item-id="oh"]')
-  ].filter(Boolean);
-  for (const anchor of anchors) {
-    let node = anchor.parentElement;
-    for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
-      if (Array.from(node.querySelectorAll('h1')).some(el => isUsablePlaceTitle(el.textContent))) return node;
-    }
-  }
-  return null;
-}
-
-function getDetailPanelTitle() {
-  const container = getDetailPanelContainer();
-  if (!container) return '';
-  for (const selector of ['h1.DUwDvf', 'h1', '[role="heading"][aria-level="1"]']) {
-    const title = Array.from(container.querySelectorAll(selector))
-      .map(el => el.textContent?.trim() || '')
-      .find(isUsablePlaceTitle);
-    if (title) return title;
-  }
-  return '';
-}
-
-function assertItemRunActive(itemRun) {
-  if (itemRun.cancelled || Date.now() >= itemRun.deadline) {
-    itemRun.cancelled = true;
-    throw new Error(`detail_item_hard_timeout: ${itemRun.url}`);
-  }
-}
-
-function runItemWithHardTimeout(itemRun, work) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      itemRun.cancelled = true;
-      reject(new Error(`detail_item_hard_timeout: ${itemRun.url}`));
-    }, DETAIL_ITEM_HARD_TIMEOUT_MS);
-  });
-  return Promise.race([work(), timeout]).finally(() => clearTimeout(timer));
-}
-
 // DOM要素が現れるまで待つ（動的待機）
 function waitForElement(selector, timeoutMs = 3000) {
   return new Promise(resolve => {
@@ -96,14 +35,12 @@ function waitUntilPanelChanged(previousName, previousUrl, timeoutMs = 4000) {
   return new Promise(resolve => {
     const deadline = Date.now() + timeoutMs;
     const iv = setInterval(() => {
-      const currentName = getDetailPanelTitle();
+      const currentName = (document.querySelector('[role="main"] h1')?.textContent?.trim()) || '';
       const currentUrl  = window.location.href;
-      const previousIdentity = extractGooglePlaceIdentity(previousUrl);
-      const currentIdentity = extractGooglePlaceIdentity(currentUrl);
       if (
         Date.now() >= deadline
-        || (isUsablePlaceTitle(currentName) && currentName !== previousName)
-        || (currentIdentity && currentIdentity !== previousIdentity)
+        || (currentName && currentName !== previousName && currentName !== '結果')
+        || (currentUrl !== previousUrl && currentUrl.includes('/maps/place/'))
       ) {
         clearInterval(iv);
         resolve({ name: currentName, url: currentUrl });
@@ -113,14 +50,27 @@ function waitUntilPanelChanged(previousName, previousUrl, timeoutMs = 4000) {
 }
 
 function getCurrentPanelName() {
-  return getDetailPanelTitle();
+  return (document.querySelector('[role="main"] h1')?.textContent?.trim()) || '';
 }
 
 function getCurrentPanelAddress() {
-  const addrBtn = document.querySelector('button[data-item-id="address"]');
+  // [role="main"] でスコープしないと、検索結果一覧カードや「関連する検索」
+  // カルーセルなど、詳細パネル以外の場所にある同じdata-item-id要素を
+  // 誤って拾ってしまう（住所・電話番号の店舗取り違えの原因になる）
+  const addrBtn = document.querySelector('[role="main"] button[data-item-id="address"]');
   if (!addrBtn) return '';
   const raw = addrBtn.getAttribute('aria-label') || addrBtn.textContent.trim();
   return raw.replace(/^住所[：:]\s*/, '').trim();
+}
+
+// 現在パネルに表示されている電話番号を取得（前店舗の電話ボタンが
+// まだDOMに残っている「取り残し」状態を検知するための基準値として使用）
+function getCurrentPanelPhone() {
+  const phoneBtn = document.querySelector('[role="main"] button[data-item-id^="phone:tel:"]');
+  if (!phoneBtn) return '';
+  const itemId = phoneBtn.getAttribute('data-item-id') || '';
+  const raw = itemId.replace('phone:tel:', '').trim() || phoneBtn.textContent.trim();
+  return normalizePhoneNumber(raw);
 }
 
 function normalizePlaceName(name) {
@@ -144,32 +94,51 @@ async function waitForPanelFieldsReady(options = {}, timeoutMs = 5500) {
     expectedUrl = '',
     previousName = '',
     previousUrl = '',
-    previousAddress = ''
+    previousAddress = '',
+    previousPhone = ''
   } = options;
   const expectedNames = [expectedName, extractNameFromUrl(expectedUrl)].filter(Boolean);
   const deadline = Date.now() + timeoutMs;
   let identityReadyAt = 0;
   let lastAddress = '';
   let addressStableAt = 0;
+  // 電話番号欄は住所欄より遅れて非同期読み込みされることがあり、
+  // 前の店舗の電話ボタンがDOMに残ったまま読み取ってしまう（取り違え）
+  // 原因になるため、住所と同様に安定するまで待つ
+  let lastPhone = null;
+  let phoneStableAt = 0;
 
   while (Date.now() < deadline) {
     const currentName = getCurrentPanelName();
     const currentUrl = window.location.href;
     const currentAddress = getCurrentPanelAddress();
-    const usableName = isUsablePlaceTitle(currentName);
-    const expectedIdentity = extractGooglePlaceIdentity(expectedUrl);
-    const currentIdentity = extractGooglePlaceIdentity(currentUrl);
+    const currentPhone = getCurrentPanelPhone();
+    const usableName = currentName && currentName !== '結果';
     const identityChanged =
       (usableName && currentName !== previousName) ||
       (currentUrl !== previousUrl && currentUrl.includes('/maps/place/'));
     const nameMatches =
       expectedNames.length === 0 ||
       expectedNames.some(name => isLikelySamePlaceName(currentName, name));
-    const identityMatches = expectedIdentity && currentIdentity === expectedIdentity;
-    const panelLooksUsable = identityMatches || usableName;
+    const panelLooksUsable = usableName || currentUrl.includes('/maps/place/');
 
-    if (panelLooksUsable && (identityMatches || identityChanged || nameMatches)) {
+    if (panelLooksUsable && (identityChanged || nameMatches)) {
       if (!identityReadyAt) identityReadyAt = Date.now();
+
+      if (currentPhone !== lastPhone) {
+        lastPhone = currentPhone;
+        phoneStableAt = Date.now();
+      }
+      // 「前と同じ値のまま一定時間経過したら本物とみなす」猶予ロジックは、
+      // Googleのパネル更新が単に遅いだけの場合と、更新が止まったまま前の
+      // 店舗のデータが残っている場合を区別できず、後者を誤って「準備完了」
+      // としてしまっていた（他店舗の住所・電話番号の混入バグの直接原因）。
+      // 前の値が分かっている場合は、実際に値が変わったことを確認できる
+      // まで待つ。変わらないまま全体タイムアウトした場合は呼び出し側の
+      // フォールバック（パネルを閉じて開き直す／スキップ）に任せる。
+      const phoneChanged = !previousPhone || currentPhone !== previousPhone;
+      const phoneStable = Date.now() - phoneStableAt >= 240;
+      const phoneReady = phoneStable && phoneChanged;
 
       if (currentAddress) {
         if (currentAddress !== lastAddress) {
@@ -178,9 +147,10 @@ async function waitForPanelFieldsReady(options = {}, timeoutMs = 5500) {
         }
         const addressChanged = !previousAddress || currentAddress !== previousAddress;
         const addressStable = Date.now() - addressStableAt >= 240;
-        const waitedLongEnoughForSameAddress = Date.now() - identityReadyAt >= 900;
-        if (addressStable && (addressChanged || waitedLongEnoughForSameAddress)) return true;
-      } else if (Date.now() - identityReadyAt >= 700) {
+        if (addressStable && addressChanged && phoneReady) return true;
+      } else if (!previousAddress && Date.now() - identityReadyAt >= 700 && phoneReady) {
+        // 住所欄自体が存在しない店舗（前の店舗の情報も無い＝最初の1件目など）
+        // の場合のみ、住所なしを正として許容する
         return true;
       }
     }
@@ -258,9 +228,21 @@ function parseTargetArea(searchArea) {
   if (!normalized) return { prefecture: '', city: '' };
 
   const parsed = parseAddress(normalized);
+  const prefecture = parsed.prefecture || '';
+  // [FIX] 市区町村名が「〜市/〜区/〜町/〜村」で終わっていない入力（例:「銚子」で
+  // 「銚子市」ではない場合）だと parseAddress() 側で市区町村が空になり、
+  // 以前はここで normalized（元の文字列全体、都道府県名を含んだまま）を
+  // そのままcityにフォールバックしていたため、都道府県名がcityに二重に
+  // 混入していた（例:「千葉県銚子」）。エリア判定(matchesTargetArea)は
+  // prefecture文字列とcity文字列を個別に住所へ含むかチェックするため、
+  // cityに都道府県名が混入していると実際の住所と一致しなくなり、該当エリアの
+  // 店舗が全件「エリア外除外」される深刻な不具合の原因になっていた
+  // （銚子市データで「指定:千葉県千葉県千葉県銚子」という三重混入を確認）。
+  // 都道府県名を除いた残り部分だけをcityフォールバックとして使う。
+  const remainder = prefecture ? normalized.slice(prefecture.length) : normalized;
   return {
-    prefecture: parsed.prefecture || '',
-    city: parsed.city || normalized
+    prefecture,
+    city: parsed.city || remainder
   };
 }
 
@@ -297,7 +279,7 @@ function matchesTargetArea(address, targetPrefecture, targetCity) {
 // 詳細パネル判定
 // =====================================================================
 function isDetailPanelOpen() {
-  return !!document.querySelector('button[data-item-id="address"]');
+  return !!document.querySelector('[role="main"] button[data-item-id="address"]');
 }
 
 async function waitForDetailPanel(timeoutMs = 5000) {
@@ -357,7 +339,19 @@ async function closeDetailPanel() {
 // リスト終端検知
 // =====================================================================
 function isEndOfList(container) {
-  if (isDetailPanelOpen()) return false;
+  // [FIX] このスクレイパーは詳細パネルを閉じずに次カードをクリックする方式
+  // （「パネルを閉じない方式」、約1820行目）を採用しているため、実際の
+  // スクレイピング中は詳細パネルが開いたままの時間がほとんどを占める。
+  // 以前はisDetailPanelOpen()がtrueの間ずっとfalseを返していたため、
+  // 結果リスト側に「リストの最後に到達しました」の文言が既に表示されていても
+  // それを検知できず、スクロール終了判定（回数上限50回や新規カード無し8回連続
+  // など）に達するまで何度も無駄なスクロールを繰り返す原因になっていた。
+  // 呼び出し元は必ず結果リスト用のcontainer（getScrollContainer()の戻り値）を
+  // 明示的に渡しているため、containerが渡された場合はそのDOM部分木のテキスト
+  // のみを見れば十分であり、詳細パネル（[role="main"]側の別DOM）の内容が
+  // 混入する心配はない。container省略時（document.body全体を見る場合）のみ、
+  // 詳細パネル側のテキストを誤検知しないよう従来通りガードする。
+  if (!container && isDetailPanelOpen()) return false;
   const target = container || document.body;
   const text = target.innerText || '';
   return /リストの最後に到達しました|You've reached the end of the list/.test(text);
@@ -477,6 +471,7 @@ const GENRE_NORMALIZE_MAP = {
 
   'スナック': 'スナック',
   'ラウンジ': 'スナック',
+  '軽食店': 'スナック',
 
   'バー': 'バー',
   'Bar': 'バー',
@@ -511,10 +506,6 @@ const GENRE_NORMALIZE_MAP = {
   'ケーキ': 'スイーツ',
   '洋菓子': 'スイーツ',
   '和菓子': 'スイーツ',
-
-  '美容院': '美容院',
-  '美容室': '美容院',
-  'ヘアサロン': '美容院',
 
   '中華': '中華',
   '中華料理': '中華',
@@ -566,14 +557,13 @@ const GENRE_NORMALIZE_MAP = {
   '定食屋': '定食・食堂',
   '食堂': '定食・食堂',
 
-  '弁当': '弁当',
-  '弁当屋': '弁当',
-  'べんとう': '弁当',
-  '仕出し': '弁当',
-
   '韓国': '韓国',
   '韓国料理': '韓国',
 
+  '弁当': 'テイクアウト専門店',
+  '弁当屋': 'テイクアウト専門店',
+  'べんとう': 'テイクアウト専門店',
+  '仕出し': 'テイクアウト専門店',
   'テイクアウト': 'テイクアウト専門店',
   'テイクアウト専門店': 'テイクアウト専門店',
   '持ち帰り': 'テイクアウト専門店',
@@ -583,108 +573,102 @@ const GENRE_NORMALIZE_MAP = {
   '拉麺': 'ラーメン',
   'つけ麺': 'ラーメン',
   '油そば': 'ラーメン',
-  'まぜそば': 'ラーメン',
-
-  'アパレル': 'アパレル',
-  '古着': 'アパレル',
-  '古着屋': 'アパレル',
-  '衣料品': 'アパレル',
-  '衣料品店': 'アパレル',
-  '洋服': 'アパレル',
-  '洋服店': 'アパレル',
-  '服屋': 'アパレル',
-  '婦人服': 'アパレル',
-  '婦人服店': 'アパレル',
-  '紳士服': 'アパレル',
-  '紳士服店': 'アパレル',
-  '子供服': 'アパレル',
-  '子供服店': 'アパレル',
-  'ブティック': 'アパレル',
-  'ファッション': 'アパレル',
-  'ファッションアクセサリー': 'アパレル',
-  'ファッション アクセサリー': 'アパレル',
-  'アクセサリー': 'アパレル',
-  'アクセサリー店': 'アパレル',
-  '靴店': 'アパレル',
-  'かばん店': 'アパレル',
-  'バッグ販売店': 'アパレル',
-  'リサイクルショップ': 'アパレル',
-  'ヴィンテージショップ': 'アパレル',
-  '作業服': 'アパレル',
-  '作業服店': 'アパレル',
-  '呉服店': 'アパレル',
-  '着物販売店': 'アパレル',
-
-  'ペットサロン': 'ペットサロン',
-  'ペット サロン': 'ペットサロン',
-  'トリミング': 'ペットサロン',
-  'トリミングサロン': 'ペットサロン',
-  'ペットトリミング': 'ペットサロン',
-  '犬の美容室': 'ペットサロン',
-  'ドッグサロン': 'ペットサロン',
-  'ドッグ サロン': 'ペットサロン',
-  'グルーミング': 'ペットサロン',
-  'ペットグルーミング': 'ペットサロン',
-  'ペット美容室': 'ペットサロン',
-  'ペットショップ': 'ペットサロン',
-  'ペット用品店': 'ペットサロン',
-  'ペットホテル': 'ペットサロン'
+  'まぜそば': 'ラーメン'
 };
 
 const GENRE_ALLOWED_MAP = {
   'カフェ': ['カフェ', '喫茶店', 'コーヒーショップ', 'コーヒーショップ・喫茶店', 'ドッグカフェ', 'カフェテリア', 'コーヒー焙煎所'],
   '喫茶店': ['カフェ', '喫茶店', 'コーヒーショップ', 'コーヒーショップ・喫茶店', 'ドッグカフェ', 'カフェテリア', 'コーヒー焙煎所'],
-  '居酒屋': ['居酒屋'],
-  'スナック': ['スナック', 'ラウンジ'],
+  '居酒屋': ['居酒屋', '焼き鳥', 'Bar', 'スナック'],
   'バー': ['バー', 'Bar', 'BAR', 'バル', 'ワインバー', 'ビアバー'],
-  'スイーツ': ['スイーツ', 'デザート', 'ケーキ'],
   '焼き鳥': ['焼き鳥', '居酒屋'],
   '和食': ['和食', '寿司'],
   '洋食': ['洋食'],
   '蕎麦・うどん': ['蕎麦・うどん'],
   '中華': ['中華'],
   '韓国': ['韓国'],
-  '弁当': ['弁当', 'テイクアウト専門店'],
-  'アパレル': [
-    'アパレル', '古着屋', '古着', '衣料品店', '衣料品', '洋服店', '服屋',
-    '婦人服店', '紳士服店', '子供服店', 'ブティック',
-    'ファッションアクセサリー店', 'ファッション アクセサリー店', 'アクセサリー店',
-    '靴店', 'かばん店', 'バッグ販売店', 'リサイクルショップ',
-    'ヴィンテージショップ', '作業服店', '呉服店', '着物販売店'
-  ],
-  'ペットサロン': [
-    'ペットサロン', 'ペット サロン', 'トリミングサロン', 'トリミング',
-    'ペットトリミング', '犬の美容室', 'ドッグサロン', 'ドッグ サロン',
-    'グルーミング', 'ペットグルーミング', 'ペット美容室',
-    'ペットショップ', 'ペット用品店', 'ペットホテル'
-  ]
+  'テイクアウト専門店': ['弁当', 'テイクアウト専門店']
 };
 
-const GENRE_EXCLUDED_MAP = {
-  'アパレル': [
-    '薬局', '調剤薬局', 'ドラッグストア', 'ドラッグ ストア', '薬店',
-    '病院', '医院', 'クリニック', '歯科', '整骨院', '整体', '鍼灸',
-    '美容院', '美容室', 'ヘアサロン', '理容店', 'ネイルサロン',
-    'スーパー', 'スーパーマーケット', 'コンビニ', 'ホームセンター',
-    '家電', '電器店', '家具店', '寝具店', '雑貨店', '百貨店',
-    '不動産', '自動車', '中古車', 'バイク', 'ガソリンスタンド',
-    'カフェ', 'レストラン', '居酒屋', '食堂', 'ホテル'
-  ],
-  'ペットサロン': [
-    '美容院', '美容室', 'ヘアサロン', '理容店', '理容室', '床屋',
-    'ネイルサロン', 'まつげサロン', 'エステ', '整体', '整骨院',
-    '病院', '医院', 'クリニック', '歯科', '薬局', 'ドラッグストア',
-    'ペット霊園', '動物霊園', '火葬', 'ブリーダー', 'ドッグラン',
-    'カフェ', 'レストラン', '居酒屋', 'ホテル', '不動産'
-  ]
-};
+// Googleマップ側から実ジャンルが取得できない/対応表に無い場合に、検索キーワードへ
+// フォールバックする前に店名から優先的に拾うジャンルキーワード。具体的な複合語ほど
+// 誤爆しにくいので先に判定させる。実データで「カフェ」検索時にラーメン屋・うどん屋等が
+// 検索語のままカフェに確定してしまう不具合を確認済みのための対応。
+const NAME_GENRE_PRIORITY_LIST = [
+  ['中華そば', 'ラーメン'],
+  ['油そば', 'ラーメン'],
+  ['まぜそば', 'ラーメン'],
+  ['つけ麺', 'ラーメン'],
+  ['拉麺', 'ラーメン'],
+  ['タンメン', 'ラーメン'],
+  ['ラーメン', 'ラーメン'],
+  ['麺屋', 'ラーメン'],
+  ['麺や', 'ラーメン'],
+  ['讃岐', '蕎麦・うどん'],
+  ['うどん', '蕎麦・うどん'],
+  ['そば', '蕎麦・うどん'],
+  ['お好み焼き', 'お好み焼き'],
+  ['もんじゃ', 'お好み焼き'],
+  ['焼き鳥', '焼き鳥'],
+  ['焼鳥', '焼き鳥'],
+  ['焼き肉', '焼肉'],
+  ['焼肉', '焼肉'],
+  ['スナック', 'スナック'],
+  ['寿司', '寿司'],
+  ['鮨', '寿司'],
+  ['うなぎ', '和食'],
+  ['鰻', '和食'],
+  ['天ぷら', '和食'],
+  ['中華', '中華'],
+  ['餃子', '中華'],
+  ['韓国', '韓国'],
+  ['ハンバーガー', 'ハンバーガー'],
+  ['ベーカリー', 'パン屋'],
+  ['パン屋', 'パン屋'],
+  ['スイーツ', 'スイーツ'],
+  ['弁当', 'テイクアウト専門店']
+];
 
-function normalizeGenre(sourceGenre, searchGenre = '') {
+function findGenreFromStoreName(storeName) {
+  const nameText = String(storeName || '').normalize('NFKC');
+  if (!nameText) return '';
+  const hit = NAME_GENRE_PRIORITY_LIST.find(pair => nameText.includes(pair[0]));
+  return hit ? hit[1] : '';
+}
+
+function normalizeGenre(sourceGenre, searchGenre = '', storeName = '') {
+  const nameText = String(storeName || '').normalize('NFKC');
+
+  // ★最優先ルール: 店名に「居酒屋」と明記されている店は、Googleマップ側の
+  // カテゴリ判定が何であっても（Bar等に分類されていても）必ず「居酒屋」に
+  // 確定させる。他の広い受け皿ジャンルに絶対に紛れさせないための最優先チェック。
+  if (nameText.includes('居酒屋')) return '居酒屋';
+
+  // ★最優先ルール: 店名にカフェ関連キーワード（カフェ/coffee/珈琲/喫茶等）が
+  // 含まれる場合も、Googleマップ側のジャンル抽出結果に関わらず必ず「カフェ」に
+  // 確定させる。実データで「検索:カフェ」でヒットした店が、抽出不良により
+  // 取得元ジャンルが「洋食」等の無関係な値になり、店名が明らかにカフェ
+  // （例:「MIFUNEYAMA COFFEE」「cafe Bohemian」等）でも洋食に混入する不具合を
+  // 88件規模で確認済み。居酒屋と同様、店名の方が抽出結果より信頼できるため
+  // 最優先で判定する。
+  if (isCafeRelated('', nameText)) return 'カフェ';
+
+  // ★最優先ルール: 店名にラーメン・蕎麦うどん・寿司・焼肉等の具体的なジャンル語が
+  // 含まれる場合も、Googleマップ側の抽出結果が既に「有効な別ジャンル」に見えていても
+  // 店名を優先する。実データで「横浜ラーメン寺田家」「竹岡式ラーメンたか木屋白井店」等、
+  // 店名に「ラーメン」と明記された店が、抽出不良で「カフェ」等の別の有効なジャンルに
+  // なってしまい、raw未取得時のみ店名を見る従来ロジックでは拾えないケースを確認した
+  // ため、居酒屋・カフェと同様に無条件の最優先チェックへ格上げする。
+  const nameGenrePriority = findGenreFromStoreName(nameText);
+  if (nameGenrePriority) return nameGenrePriority;
+
   const raw = String(sourceGenre || '').normalize('NFKC').trim();
 
-  // Googleマップ側から実際のジャンルが全く取得できなかった場合のみ、
-  // 検索キーワードを最後の手段として使う。
-  if (!raw) return (searchGenre || '').normalize('NFKC').trim();
+  // Googleマップ側から実際のジャンルが全く取得できなかった場合は検索語を使う
+  // （店名からの判定は上の最優先ルールで既に試行済み）。
+  if (!raw) {
+    return (searchGenre || '').normalize('NFKC').trim();
+  }
 
   if (GENRE_NORMALIZE_MAP[raw]) return GENRE_NORMALIZE_MAP[raw];
   for (const [key, normalized] of Object.entries(GENRE_NORMALIZE_MAP)) {
@@ -693,7 +677,7 @@ function normalizeGenre(sourceGenre, searchGenre = '') {
     }
   }
 
-  // 対応表に無いジャンルは、検索語で上書きせず実際に取得した表記をそのまま使う。
+  // それでも決まらなければ、検索語で上書きせず実際に取得した表記をそのまま使う。
   return raw;
 }
 
@@ -744,7 +728,7 @@ const excluded = [
       }
     }
   }
-  if (!scrapeOptions.disablePreGenreExclusion && excluded.some(word => text.includes(word.normalize('NFKC').toLowerCase()))) score -= 100;
+  if (excluded.some(word => text.includes(word.normalize('NFKC').toLowerCase()))) score -= 100;
 
   return score;
 }
@@ -811,62 +795,50 @@ function extractRawGenreFromPanel() {
   return '';
 }
 
-function extractBusinessStatusFromPanel() {
-  const mainText = String(document.querySelector('[role="main"]')?.textContent || '')
-    .normalize('NFKC')
-    .replace(/\s+/g, ' ')
-    .trim();
-
-  const closedPatterns = [
-    { status: 'closed_temporarily', label: '休業中', pattern: /休業中|一時休業|臨時休業|temporarily closed/i },
-    { status: 'closed_permanently', label: '閉業', pattern: /閉業|閉店|閉鎖|permanently closed/i }
-  ];
-
-  const hit = closedPatterns.find(({ pattern }) => pattern.test(mainText));
-  if (!hit) return { status: 'active', label: '' };
-  return { status: hit.status, label: hit.label };
-}
-
-function isClosedBusinessStatus(businessStatus) {
-  return ['closed_temporarily', 'closed_permanently'].includes(businessStatus?.status);
-}
-
 // =====================================================================
 // 詳細パネルスクレイピング (改善版: 動的待機・phoneStatus/hasWebsiteStatus付き)
 // =====================================================================
 async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
-  // document全体の先頭h1（「結果」）ではなく、住所/電話を含む詳細コンテナのタイトルを使う。
-  const panelTitle = getDetailPanelTitle();
-  let name = isUsablePlaceTitle(panelTitle)
-    ? panelTitle
-    : (isUsablePlaceTitle(cardName) ? cardName : extractNameFromUrl(placeUrl));
-  if (!isUsablePlaceTitle(name)) name = '';
+  // 店名確認: 前店舗でないか、正しいパネルが開いているか確認（動的待機）
+  let name = cardName;
+  if (cardName) {
+    const panelNameEl = await waitForElement('[role="main"] h1', 3000);
+    if (panelNameEl) {
+      name = panelNameEl.textContent.trim();
+      if (!name || name === '結果') name = cardName;
+    }
+  } else {
+    const panelNameEl = await waitForElement('[role="main"] h1', 2000);
+    name = panelNameEl?.textContent?.trim() || extractNameFromUrl(placeUrl);
+    if (!name || name === '結果') name = extractNameFromUrl(placeUrl);
+  }
 
   const googleGenre = extractRawGenreFromPanel();
-  const genre = normalizeGenre(googleGenre, searchGenre);
-  const businessStatus = extractBusinessStatusFromPanel();
+  const genre = normalizeGenre(googleGenre, searchGenre, name);
 
   // 営業時間トグルをクリック（動的待機）
-  const hoursToggle = document.querySelector('button[data-item-id="oh"]');
+  const hoursToggle = document.querySelector('[role="main"] button[data-item-id="oh"]');
   if (hoursToggle && hoursToggle.getAttribute('aria-expanded') !== 'true') {
     hoursToggle.click();
   }
 
   // 住所（動的待機）
+  // [role="main"] でスコープ: 検索結果一覧やカルーセルにある別店舗の
+  // 同名data-item-id要素を拾ってしまう取り違えを防ぐ
   let address = '';
-  const detailContainer = getDetailPanelContainer();
-  const addrBtn = detailContainer?.querySelector('button[data-item-id="address"]')
-    || document.querySelector('button[data-item-id="address"]');
+  const addrBtn = await waitForElement('[role="main"] button[data-item-id="address"]', 3000);
   if (addrBtn) {
     const raw = addrBtn.getAttribute('aria-label') || addrBtn.textContent.trim();
     address = raw.replace(/^住所[：:]\s*/, '').trim();
   }
 
   // 電話番号 + phoneStatus（動的待機）
+  // 同様に[role="main"]でスコープ。一覧カードの「発信」ボタンにも
+  // button[data-item-id^="phone:tel:"] と同じ属性が付くことがあり、
+  // スコープなしだと無関係な店舗の電話番号を拾ってしまっていた
   let phone = '';
   let phoneStatus = 'missing';
-  const phoneBtn = detailContainer?.querySelector('button[data-item-id^="phone:tel:"]')
-    || document.querySelector('button[data-item-id^="phone:tel:"]');
+  const phoneBtn = await waitForElement('[role="main"] button[data-item-id^="phone:tel:"]', 2500);
   if (phoneBtn) {
     const itemId = phoneBtn.getAttribute('data-item-id') || '';
     phone = itemId.replace('phone:tel:', '').trim() || phoneBtn.textContent.trim();
@@ -884,7 +856,7 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
   // HP有無 + hasWebsiteStatus（高精度判定）
   let hasWebsite = '無';
   let hasWebsiteStatus = 'no_website';
-  const hpLinkEl = document.querySelector('a[data-item-id="authority"]');
+  const hpLinkEl = document.querySelector('[role="main"] a[data-item-id="authority"]');
   if (hpLinkEl) {
     const hpUrl = (hpLinkEl.getAttribute('href') || '').toLowerCase();
     const portalDomains = [
@@ -912,11 +884,12 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
   }
 
   // 営業時間 (動的待機でtableが開くのを待つ)
+  // ここも[role="main"]でスコープし、他要素のtrを拾わないようにする
   if (hoursToggle) {
-    await waitForElement('tr', 600);
+    await waitForElement('[role="main"] tr', 1500);
   }
 
-  const rawHourRows = Array.from(document.querySelectorAll('tr'))
+  const rawHourRows = Array.from(document.querySelectorAll('[role="main"] tr'))
     .map(tr => tr.textContent.trim())
     .filter(t => /^[月火水木金土日]曜日/.test(t));
 
@@ -932,8 +905,6 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
 
   return {
     name, genre, googleGenre, address, phone, phoneStatus,
-    businessStatus: businessStatus.status,
-    businessStatusLabel: businessStatus.label,
     hasWebsite, hasWebsiteStatus, rawHours, ...parsed
   };
 }
@@ -1009,7 +980,7 @@ async function collectAllPlaceUrlsFromResults(options = {}) {
     maxResults = 0
   } = options;
 
-  const feed = getScrollContainer()
+  let feed = getScrollContainer()
     || document.querySelector('div[role="feed"]')
     || document.querySelector('[aria-label*="検索結果"]')
     || document.querySelector('[aria-label*="Results"]');
@@ -1022,6 +993,14 @@ async function collectAllPlaceUrlsFromResults(options = {}) {
   let scrollCount = 0;
 
   for (let i = 0; i < maxScrolls && !stopRequested; i++) {
+    // [FIX] feedを最初の1回しか解決していなかったため、Googleマップ側の
+    // 再レンダリングでこの要素がDOMから差し替えられる（detachされる）と、
+    // 以降isEndOfList(feed)は古い（切り離された）要素のinnerTextを見続ける
+    // ことになり、実際には「リストの最後に到達しました」の文言が画面上に
+    // 表示されていても検知できず、maxScrolls(既定200回・約5分)に達するまで
+    // 延々とスクロールを続けてしまい、詳細取得フェーズが開始しない原因に
+    // なっていた。毎回のスクロール前に最新のコンテナへ再解決する。
+    feed = getScrollContainer() || feed;
     scrollCount = i + 1;
     const beforeCount = seen.size;
     const links = getResultLinks(document);
@@ -1424,9 +1403,6 @@ function matchesTargetGenres(detail, targetGenres) {
   if (!targetGenres || targetGenres.length === 0) return true;
   return targetGenres.some(g => {
     const normalizedTarget = normalizeGenre(g, g);
-    if (isExcludedGenreForTarget(detail, normalizedTarget)) {
-      return false;
-    }
     if (normalizedTarget === 'カフェ' && isCafeRelated(detail.googleGenre || detail.genre, detail.name)) {
       return true;
     }
@@ -1435,7 +1411,7 @@ function matchesTargetGenres(detail, targetGenres) {
       normalizedTarget,
       detail.genre,
       detail.googleGenre,
-      normalizeGenre(detail.googleGenre, detail.searchGenre || '')
+      normalizeGenre(detail.googleGenre, detail.searchGenre || '', detail.name)
     ].map(v => String(v || '').normalize('NFKC').toLowerCase()).filter(Boolean);
 
     const targetValues = [g, normalizedTarget]
@@ -1454,29 +1430,6 @@ function matchesTargetGenres(detail, targetGenres) {
   });
 }
 
-function isExcludedGenreForTarget(detail, targetGenre) {
-  const excludedValues = GENRE_EXCLUDED_MAP[targetGenre] || [];
-  if (!excludedValues.length) return false;
-
-  const text = [
-    detail.name,
-    detail.genre,
-    detail.googleGenre,
-    detail.sourceGenre
-  ].map(v => String(v || '').normalize('NFKC').toLowerCase()).join(' ');
-
-  return excludedValues.some(word => text.includes(String(word).normalize('NFKC').toLowerCase()));
-}
-
-function matchesStrictRequestedGenre(detail, requestedGenres) {
-  const strictTargets = (requestedGenres || [])
-    .map(g => normalizeGenre(g, g))
-    .filter(g => ['アパレル', 'ペットサロン'].includes(g));
-
-  if (!strictTargets.length) return true;
-  return strictTargets.some(target => matchesTargetGenres(detail, [target]));
-}
-
 // =====================================================================
 // エリアフィルタ
 // =====================================================================
@@ -1492,21 +1445,33 @@ function matchesSearchArea(detail, searchArea) {
 let isScrapingActive = false;
 let stopRequested = false;
 let currentFlushPromise = null;
-let currentComboId = '';
 
 async function flushBatch(pendingBatch) {
   if (!pendingBatch.length) return 0;
   const payload = [...pendingBatch];
   pendingBatch.length = 0;
-  const flushed = await new Promise(res => {
+  const result = await new Promise(res => {
     try {
-      chrome.runtime.sendMessage({ action: 'updateData', data: payload }, () => {
-        if (chrome.runtime.lastError) { /* ignore */ }
-        res(payload.length);
+      chrome.runtime.sendMessage({ action: 'updateData', data: payload }, response => {
+        if (chrome.runtime.lastError) {
+          res({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+        res(response && typeof response === 'object' ? response : { success: true, count: payload.length });
       });
-    } catch (_) { res(payload.length); }
+    } catch (e) { res({ success: false, error: String(e) }); }
   });
-  return flushed;
+
+  if (!result.success) {
+    // 保存失敗(容量超過等)を以前は検知せず「保存成功」扱いにしていたため、
+    // 取得したはずのデータが気づかれないまま消えるリスクがあった。
+    // 失敗時はバッファに戻して次回flushで再試行し、ログでも警告する。
+    pendingBatch.push(...payload);
+    reportV3Log(`⚠️ データ保存失敗: ${payload.length}件を再試行キューに戻しました / ${result.error || '原因不明'}`);
+    return 0;
+  }
+
+  return payload.length;
 }
 
 function reportV3Log(message) {
@@ -1575,15 +1540,16 @@ async function enforceMinZoom(targetZoom, maxAdjustSteps = 15) {
   reportV3Log(zoom !== null ? `🔍 縮尺補正完了: ${zoom}z` : '🔍 縮尺補正: URL取得不可のため確認できず');
 }
 
-async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}) {
+async function startScraping(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}) {
+  isScrapingActive = true;
+  stopRequested = false;
   searchPageUrl = window.location.href;
+  await reportState('active');
   const effectiveMaxItems = Number(maxItems) > 0 ? Number(maxItems) : Number.MAX_SAFE_INTEGER;
 
   const query = getCurrentQuery();
   const { searchGenre: parsedGenre, searchKey } = parseSearchMeta(query, searchGenre);
   const effectiveGenre = searchGenre || parsedGenre;
-  const outputGenre = String(scrapeOptions.outputGenre || effectiveGenre || '').trim();
-  const searchQueryForRecord = scrapeOptions.searchQuery || query || '';
   const speedStats = createSpeedStats({ searchArea, searchGenre: effectiveGenre, searchKey, maxItems: effectiveMaxItems });
   const targetArea = parseTargetArea(searchArea);
 
@@ -1595,6 +1561,8 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   let container = getScrollContainer();
   if (!container) {
     reportV3Log('エラー: コンテナが見つかりません');
+    isScrapingActive = false;
+    await reportState('done');
     return;
   }
 
@@ -1632,21 +1600,14 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   // 詳細パネルを閉じない方式のため、前回パネル情報を追跡
   let prevPanelName = '';
   let prevPanelUrl = window.location.href;
+  // 直前に確定保存したレコード（店名が違うのに住所・電話番号が完全一致する
+  // ケースを検知するための最終防衛ライン。fieldsReadyのチェックをすり抜けて
+  // 前店舗のデータが混入した場合の保険）
+  let lastPushedRecord = null;
 
   const cardQueue = [];
   const precollectedItems = collectedResult.items;
   let precollectedIndex = 0;
-  const completedQueueUrls = new Set();
-  const queueTotal = precollectedItems.length;
-  let queueProcessed = 0;
-
-  function completeQueueItem(url, outcome) {
-    const key = url || `missing_${queueProcessed}`;
-    if (completedQueueUrls.has(key)) return;
-    completedQueueUrls.add(key);
-    queueProcessed++;
-    reportV3Log(`[${queueProcessed}/${queueTotal}] ${outcome}: ${url || '(URLなし)'}`);
-  }
 
   // =====================================================================
   // カードキュー構築（DOM参照を持たず情報のみ）
@@ -1660,23 +1621,18 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         const item = { ...sourceItem, scrollBatch: queueBatchNo };
         const url = item.url;
 
-        if (!url || processedUrls.has(url) || queuedOrProcessingUrls.has(url)) {
-          completeQueueItem(url, 'スキップ');
-          continue;
-        }
+        if (!url || processedUrls.has(url) || queuedOrProcessingUrls.has(url)) continue;
 
         const existing = existingRecords.get(url);
         if (existing && isCompleteRecord(existing)) {
           speedStats.skippedComplete++;
           logSkip(item, '完全取得済み', item.name || existing.name || url);
-          completeQueueItem(url, '取得済み');
           continue;
         }
 
         if (existing && existing.phoneStatus === 'not_available' && existing.hasWebsiteStatus !== 'unknown' && isCompleteRecord(existing)) {
           speedStats.skippedNotAvailable++;
           logSkip(item, '掲載なしスキップ', item.name || existing.name || url);
-          completeQueueItem(url, '掲載なし取得済み');
           continue;
         }
 
@@ -1688,7 +1644,6 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
         if ((attemptCounts.get(url) || 0) >= 2) {
           logSkip(item, '詳細取得失敗(2回)', item.name || url);
-          completeQueueItem(url, '再試行上限');
           continue;
         }
 
@@ -1697,7 +1652,6 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         if (score < (scrapeOptions.minScore ?? 0)) {
           speedStats.genreExcluded++;
           logSkip(item, '詳細取得前フィルタ', `${item.name || url} / score:${score}`);
-          completeQueueItem(url, '事前除外');
           continue;
         }
 
@@ -1784,7 +1738,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   // =====================================================================
   // メインループ
   // =====================================================================
-  while (!stopRequested && queueProcessed < queueTotal) {
+  while (!stopRequested && totalProcessed < effectiveMaxItems) {
     container = getScrollContainer() || container;
     if (!container) {
       speedStats.scrollEndReason = 'scroll_container_not_found';
@@ -1804,8 +1758,6 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
     // キューが空→スクロール
     if (!cardQueue.length) {
-      // 直前の10件がすべてスキップでも、未処理の事前収集URLがあれば必ず次batchへ進む。
-      if (precollectedIndex < precollectedItems.length) continue;
       if (isEndOfList(container)) {
         speedStats.scrollEndReason = 'end_of_list_message';
         break;
@@ -1848,7 +1800,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
     // =====================================================================
     // カードを1件ずつ処理
     // =====================================================================
-    while (cardQueue.length && !stopRequested) {
+    while (cardQueue.length && !stopRequested && totalProcessed < effectiveMaxItems) {
       const item = cardQueue.shift();
       const { url, name: cardName } = item;
 
@@ -1859,14 +1811,8 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
       const itemStartedAt = performance.now();
       attemptCounts.set(url, (attemptCounts.get(url) || 0) + 1);
-      const itemRun = {
-        url,
-        cancelled: false,
-        deadline: Date.now() + DETAIL_ITEM_HARD_TIMEOUT_MS
-      };
 
       try {
-        await runItemWithHardTimeout(itemRun, async () => {
         // --- 1. カード再解決 ---
         const searchStartedAt = performance.now();
         container = getScrollContainer() || container;
@@ -1893,15 +1839,16 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         if (!cardLink) {
           speedStats.failed++;
           if ((attemptCounts.get(url) || 0) >= 2) logSkip(item, '詳細取得失敗', cardName || url);
-          return;
+          queuedOrProcessingUrls.delete(url);
+          continue;
         }
-        assertItemRunActive(itemRun);
 
         // --- 2. クリック（詳細パネルを閉じない方式）---
         const clickStartedAt = performance.now();
         const previousPanelName = prevPanelName || getCurrentPanelName();
         const previousPanelUrl = prevPanelUrl || window.location.href;
         const previousPanelAddress = getCurrentPanelAddress();
+        const previousPanelPhone = getCurrentPanelPhone();
 
         // 詳細パネルが既に開いている場合、パネルを閉じずに次カードをクリック
         if (isDetailPanelOpen()) {
@@ -1910,46 +1857,70 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
           // パネル内容の切り替わりを確認（前店舗名/URLと異なることを確認）
           const panelWaitStarted = performance.now();
-          const changed = await waitUntilPanelChanged(previousPanelName, previousPanelUrl, 1200);
+          const changed = await waitUntilPanelChanged(previousPanelName, previousPanelUrl, 4000);
           const fieldWaitStarted = performance.now();
           const fieldsReady = await waitForPanelFieldsReady({
             expectedName: cardName,
             expectedUrl: url,
             previousName: previousPanelName,
             previousUrl: previousPanelUrl,
-            previousAddress: previousPanelAddress
-          }, 1800);
-          assertItemRunActive(itemRun);
+            previousAddress: previousPanelAddress,
+            previousPhone: previousPanelPhone
+          }, 4500);
           addTiming(speedStats, 'panelWait', performance.now() - fieldWaitStarted);
 
           const panelDidNotChange = changed.name === previousPanelName && changed.url === previousPanelUrl;
-          if (panelDidNotChange) {
-            // 切り替わらなかった: フォールバックで閉じてから開く
-            reportV3Log(`パネル切り替わらず フォールバック: ${cardName || url}`);
+          // 住所・電話番号の更新が確認できなかった場合（fieldsReady=false）も、
+          // 以前は「取得は続行」として前店舗のデータをそのまま使ってしまっていた。
+          // これが「別店舗の電話番号・住所が混入する」バグの主因だったため、
+          // パネル名/URLが変わらなかった場合と同じフォールバック（閉じて開き直す）
+          // を必ず実行するように変更。それでも確認できなければスキップする。
+          if (panelDidNotChange || !fieldsReady) {
+            reportV3Log(panelDidNotChange
+              ? `パネル切り替わらず フォールバック: ${cardName || url}`
+              : `詳細欄更新未確認 フォールバック: ${cardName || url}`);
             const backMs0 = performance.now();
             await closeDetailPanel();
-            assertItemRunActive(itemRun);
             addTiming(speedStats, 'back', performance.now() - backMs0);
 
-            cardLink.click();
+            // [FIX] closeDetailPanel()は「戻る」クリック/履歴操作/Escapeキーなど
+            // DOMを大きく書き換える処理を含むため、closeDetailPanel呼び出し前に
+            // 解決していたcardLinkは既にDOMから切り離されている（detached）
+            // 可能性が高い。detached要素へのclick()は何も起こさず、以降の
+            // waitForDetailPanel/waitForPanelFieldsReadyが「変化なし」のまま
+            // 停止して見える原因になっていたため、クリック直前に要素を再解決する。
+            container = getScrollContainer() || container;
+            let fallbackCardEl = resolveCardElementByUrl(url, container);
+            if (!fallbackCardEl) {
+              fallbackCardEl = await scrollToCardUrl(url, container, 20);
+              container = getScrollContainer() || container;
+            }
+            const fallbackCardLink = fallbackCardEl?.querySelector?.('a[href*="/maps/place/"]')
+              || fallbackCardEl?.closest?.('a[href*="/maps/place/"]');
+            if (!fallbackCardLink) {
+              speedStats.failed++;
+              queuedOrProcessingUrls.delete(url);
+              logSkip(item, '詳細取得失敗(フォールバック・カード再取得不可)', cardName || url);
+              continue;
+            }
+            fallbackCardLink.click();
             const panelWaitFallback = performance.now();
-            const fallbackReady = await waitForDetailPanel(1200);
+            const fallbackReady = await waitForDetailPanel(4000);
             const fallbackFieldsReady = fallbackReady && await waitForPanelFieldsReady({
               expectedName: cardName,
               expectedUrl: url,
               previousName: previousPanelName,
               previousUrl: previousPanelUrl,
-              previousAddress: previousPanelAddress
-            }, 1500);
-            assertItemRunActive(itemRun);
+              previousAddress: previousPanelAddress,
+              previousPhone: previousPanelPhone
+            }, 4500);
             addTiming(speedStats, 'panelWait', performance.now() - panelWaitFallback);
             if (!fallbackReady || !fallbackFieldsReady) {
               speedStats.failed++;
+              queuedOrProcessingUrls.delete(url);
               logSkip(item, '詳細取得失敗(フォールバック)', cardName || url);
-              return;
+              continue;
             }
-          } else if (!fieldsReady) {
-            reportV3Log(`詳細欄更新待ちタイムアウト: ${cardName || url}（取得は続行）`);
           }
         } else {
           // 詳細パネルが閉じている: 通常通りクリック
@@ -1957,15 +1928,15 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           addTiming(speedStats, 'click', performance.now() - clickStartedAt);
 
           const panelWaitStarted = performance.now();
-          const panelReady = await waitForDetailPanel(1500);
+          const panelReady = await waitForDetailPanel(5000);
           addTiming(speedStats, 'panelWait', performance.now() - panelWaitStarted);
 
           if (!panelReady) {
             speedStats.failed++;
             await closeDetailPanel();
-            assertItemRunActive(itemRun);
+            queuedOrProcessingUrls.delete(url);
             logSkip(item, '詳細取得失敗(パネル未表示)', cardName || url);
-            return;
+            continue;
           }
 
           const fieldWaitStarted = performance.now();
@@ -1974,12 +1945,18 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             expectedUrl: url,
             previousName: previousPanelName,
             previousUrl: previousPanelUrl,
-            previousAddress: previousPanelAddress
-          }, 1800);
-          assertItemRunActive(itemRun);
+            previousAddress: previousPanelAddress,
+            previousPhone: previousPanelPhone
+          }, 4500);
           addTiming(speedStats, 'panelWait', performance.now() - fieldWaitStarted);
+          // 住所・電話番号の更新が確認できない場合、以前は「取得は続行」として
+          // 未確認のまま(=前の内容の可能性がある)データを使ってしまっていた。
+          // 別店舗のデータ混入を防ぐため、確認できなければこの店舗はスキップする
           if (!fieldsReady) {
-            reportV3Log(`詳細欄更新待ちタイムアウト: ${cardName || url}（取得は続行）`);
+            speedStats.failed++;
+            queuedOrProcessingUrls.delete(url);
+            logSkip(item, '詳細欄更新未確認', cardName || url);
+            continue;
           }
         }
 
@@ -1988,7 +1965,6 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         // --- 3. 情報取得 ---
         const scrapeStartedAt = performance.now();
         const detail = await scrapeDetailPanel(url, cardName, effectiveGenre);
-        assertItemRunActive(itemRun);
         detail.searchGenre = effectiveGenre;
         addTiming(speedStats, 'scrape', performance.now() - scrapeStartedAt);
 
@@ -1996,36 +1972,27 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         prevPanelName = detail.name || '';
         prevPanelUrl = window.location.href;
 
-        if (!isUsablePlaceTitle(detail.name)) {
+        if (!detail.name || detail.name === '結果') {
           logSkip(item, '店名未取得', `URL:${url}`);
-          return;
+          queuedOrProcessingUrls.delete(url);
+          continue;
         }
 
         if (!detail.address) {
           speedStats.addressMissing++;
           logSkip(item, '住所未取得', `店舗名:${detail.name}`);
-          return;
+          queuedOrProcessingUrls.delete(url);
+          continue;
         }
 
         reportV3Log(`ジャンル変換: ${detail.googleGenre || '(未取得)'} → ${detail.genre || '(空欄)'} / 検索:${effectiveGenre || '-'}`);
-
-        if (isClosedBusinessStatus(detail)) {
-          speedStats.genreExcluded++;
-          logSkip(item, '休業・閉業除外', `${detail.name}|${detail.businessStatusLabel || detail.businessStatus}`);
-          return;
-        }
-
-        if (!matchesStrictRequestedGenre(detail, [outputGenre, effectiveGenre])) {
-          speedStats.genreExcluded++;
-          logSkip(item, '対象外ジャンル除外', `${detail.name}|${detail.genre}(${detail.googleGenre}) / 指定:${outputGenre || effectiveGenre}`);
-          return;
-        }
 
         // ジャンルフィルタ
         if (!matchesTargetGenres(detail, targetGenres)) {
           speedStats.genreExcluded++;
           logSkip(item, 'ジャンル不一致', `${detail.name}|${detail.genre}(${detail.googleGenre})`);
-          return;
+          queuedOrProcessingUrls.delete(url);
+          continue;
         }
 
         // エリアフィルタ
@@ -2036,16 +2003,16 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             'エリア外除外',
             `店舗名:${detail.name} / 住所:${detail.address} / 指定:${targetArea.prefecture}${targetArea.city}`
           );
-          return;
+          queuedOrProcessingUrls.delete(url);
+          continue;
         }
 
         const parsedAddr = parseAddress(detail.address);
 
         const record = {
           name: detail.name,
-          genre: outputGenre || detail.genre,
+          genre: detail.genre,
           sourceGenre: detail.googleGenre,
-          googleGenre: detail.googleGenre,
           prefecture: parsedAddr.prefecture,
           city: parsedAddr.city,
           subArea: scrapeOptions.subAreaLabel || scrapeOptions.subArea || '',
@@ -2066,9 +2033,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           sourceUrl: searchPageUrl,
           scrapedAt: new Date().toISOString(),
           searchGenre: effectiveGenre,
-          outputGenre: outputGenre || '',
           searchKey,
-          searchQuery: searchQueryForRecord,
           scrapeMode: scrapeOptions.scrapeModeLabel || scrapeOptions.scrapeMode || '',
           rangeMode: scrapeOptions.rangeMode || '',
           acquisitionStatus: '取得成功',
@@ -2079,10 +2044,27 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           scrollBatchNo: item.scrollBatch
         };
 
+        // 最終防衛ライン: 店名が違うのに住所が直前レコードと完全一致している
+        // 場合、パネルが更新されないまま前店舗のデータを読んでしまった疑いが
+        // 強いため、このレコードは保存せずスキップする
+        // （fieldsReadyのチェックをすり抜けた場合の保険）。
+        // 電話番号は両方とも「掲載なし」で空欄同士のケースもあるため、
+        // 住所の一致だけでも十分怪しいと判断する（電話も一致すればなお確実）。
+        const suspectedStaleCopy = lastPushedRecord
+          && record.name !== lastPushedRecord.name
+          && record.address && record.address === lastPushedRecord.address;
+        if (suspectedStaleCopy) {
+          speedStats.failed++;
+          queuedOrProcessingUrls.delete(url);
+          logSkip(item, '前店舗とデータ完全一致(混入疑い)', `${record.name} / ${record.address} / ${record.phone}`);
+          continue;
+        }
+
         totalProcessed++;
         speedStats.detailFetched++;
         markRecordQuality(speedStats, record);
         lastProcessedItem = item;
+        lastPushedRecord = record;
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(0);
         const perItem = totalProcessed > 0 ? (elapsed / totalProcessed).toFixed(1) : '-';
@@ -2099,7 +2081,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         pendingBatch.push(record);
         existingRecords.set(url, record);
 
-        if (pendingBatch.length >= BATCH_SIZE || queueProcessed + 1 >= queueTotal || !isScrapingActive) {
+        if (pendingBatch.length >= BATCH_SIZE || totalProcessed >= effectiveMaxItems || !isScrapingActive) {
           const saveStartedAt = performance.now();
           currentFlushPromise = flushBatch(pendingBatch);
           const flushed = await currentFlushPromise;
@@ -2119,34 +2101,24 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           });
         } catch (_) { }
 
-        });
+        queuedOrProcessingUrls.delete(url);
+
       } catch (err) {
         console.error('[Scraper] エラー:', err);
         speedStats.failed++;
-        const hardTimedOut = err?.message?.includes('detail_item_hard_timeout');
-        logSkip(item, hardTimedOut ? '詳細取得HARD TIMEOUT' : '詳細取得失敗(例外)', cardName || url);
+        if ((attemptCounts.get(url) || 0) >= 2) logSkip(item, '詳細取得失敗(例外)', cardName || url);
+        queuedOrProcessingUrls.delete(url);
         // エラー時は既存の詳細パネルを閉じてリカバリ
-        if (!hardTimedOut && isDetailPanelOpen()) {
-          await Promise.race([closeDetailPanel(), sleep(500)]).catch(() => {});
+        if (isDetailPanelOpen()) {
+          await closeDetailPanel().catch(() => {});
           prevPanelName = '';
           prevPanelUrl = window.location.href;
         }
-        if (!hardTimedOut) await sleep(100);
-      } finally {
-        itemRun.cancelled = true;
-        processedUrls.add(url);
-        queuedOrProcessingUrls.delete(url);
-        completeQueueItem(url, '処理完了');
+        await sleep(200);
       }
     }
 
-    if (stopRequested || queueProcessed >= queueTotal) break;
-  }
-
-  if (!stopRequested && queueProcessed !== queueTotal) {
-    reportV3Log(`詳細フェーズ件数不一致: queueProcessed=${queueProcessed} / queueTotal=${queueTotal}`);
-  } else if (!stopRequested) {
-    reportV3Log(`詳細フェーズ完了: queueProcessed=${queueProcessed} / queueTotal=${queueTotal}`);
+    if (stopRequested || totalProcessed >= effectiveMaxItems) break;
   }
 
   // =====================================================================
@@ -2155,7 +2127,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   if (!speedStats.scrollEndReason) {
     speedStats.scrollEndReason = stopRequested
       ? 'stopped_by_user'
-      : (queueProcessed >= queueTotal ? 'detail_queue_drained' : 'scraping_stopped');
+      : (totalProcessed >= effectiveMaxItems ? 'target_count_reached' : 'scraping_stopped');
   }
 
   if (pendingBatch.length > 0) {
@@ -2173,40 +2145,18 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
   reportV3Log(buildSpeedSummary(speedStats, stopRequested ? 'ユーザー停止速度ログ' : 'コンボ完了速度ログ'));
 
+  isScrapingActive = false;
+  const finalState = stopRequested ? 'stopped_by_user' : 'done';
   if (stopRequested) {
     reportV3Log(`ユーザー停止: 取得済み${totalProcessed}件をCSV出力します`);
   }
+  await reportState(finalState);
 }
 
-async function startScraping(maxItems, targetGenres = [], searchArea = '', searchGenre = '', scrapeOptions = {}, comboId = '') {
-  isScrapingActive = true;
-  stopRequested = false;
-  currentComboId = comboId || `legacy_${Date.now()}`;
-  let finalState = 'done';
-  let fatalError = null;
-  try {
-    await reportState('active');
-    await startScrapingCore(maxItems, targetGenres, searchArea, searchGenre, scrapeOptions);
-    finalState = stopRequested ? 'stopped_by_user' : 'done';
-  } catch (error) {
-    fatalError = error;
-    finalState = stopRequested ? 'stopped_by_user' : 'error';
-    console.error('[Scraper] 致命的エラー:', error);
-  } finally {
-    isScrapingActive = false;
-    await reportState(finalState, fatalError);
-  }
-}
-
-async function reportState(state, error = null) {
+async function reportState(state) {
   return new Promise(r => {
     try {
-      chrome.runtime.sendMessage({
-        action: 'setState',
-        state,
-        comboId: currentComboId,
-        error: error ? String(error?.message || error) : ''
-      }, () => {
+      chrome.runtime.sendMessage({ action: 'setState', state }, () => {
         if (chrome.runtime.lastError) { }
         r();
       });
@@ -2231,8 +2181,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const incomingGenre   = typeof request.searchGenre === 'string' ? request.searchGenre.trim() : '';
     const incomingOptions = request.scrapeOptions && typeof request.scrapeOptions === 'object' ? request.scrapeOptions : {};
 
-    startScraping(request.maxItems ?? 50, incomingGenres, incomingArea, incomingGenre, incomingOptions, request.comboId);
-    sendResponse({ success: true, comboId: request.comboId || '' });
+    startScraping(request.maxItems ?? 50, incomingGenres, incomingArea, incomingGenre, incomingOptions).catch(err => {
+      console.error('[Scraper] 致命的エラー:', err);
+      isScrapingActive = false;
+      reportState(stopRequested ? 'stopped_by_user' : 'done');
+    });
+    sendResponse({ success: true });
     return false;
   }
 

@@ -1,13 +1,6 @@
 // background.js  v3.4.0 (共通スキーマ対応版)
 
 const downloadedRunIds = new Set();
-const MAP_TARGET_GENRES = Object.freeze(['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥']);
-const MAP_TARGET_GENRE_SET = new Set(MAP_TARGET_GENRES);
-
-function getMapTargetGenre(item = {}, fallback = {}) {
-  const genre = String(item.outputGenre || item.genre || item.searchGenre || fallback.genre || '').trim();
-  return MAP_TARGET_GENRE_SET.has(genre) ? genre : '';
-}
 
 // =====================================================================
 // CSVヘッダー定義 (共通スキーマ + デバッグ項目)
@@ -15,8 +8,7 @@ function getMapTargetGenre(item = {}, fallback = {}) {
 const CSV_HEADERS = [
   '店名', 'ジャンル', '検索ジャンル', '取得元ジャンル', '都道府県', '市区町村', '住所', '電話番号',
   '定休日', '営業日', '営業開始A', '営業終了A', '営業開始B', '営業終了B',
-  '営業時間原文', 'URL', 'HP有無', '媒体', '取得元URL', '取得日時',
-  '検索エリア', '検索クエリ', 'Googleマップジャンル', '取得モード', '取得ステータス'
+  '営業時間原文', 'URL', 'HP有無', '媒体', '取得元URL', '取得日時'
 ];
 
 function normalizeExportRecord(item) {
@@ -41,11 +33,8 @@ function normalizeExportRecord(item) {
     source: item.source || 'GoogleMap',
     sourceUrl: item.sourceUrl || '',
     scrapedAt: item.scrapedAt || '',
-    area: item.area || item.searchArea || '',
     searchGenre: item.searchGenre || '',
     searchKey: item.searchKey || '',
-    searchQuery: item.searchQuery || '',
-    googleGenre: item.googleGenre || item.sourceGenre || '',
     scrapeMode: item.scrapeMode || '',
     rangeMode: item.rangeMode || '',
     acquisitionStatus: item.acquisitionStatus || '取得成功',
@@ -83,12 +72,7 @@ function buildCsvContent(data) {
       escapeCsvValue(r.hasWebsite),
       escapeCsvValue(r.source),
       escapeCsvValue(r.sourceUrl),
-      escapeCsvValue(r.scrapedAt),
-      escapeCsvValue(r.area),
-      escapeCsvValue(r.searchQuery || r.searchKey),
-      escapeCsvValue(r.googleGenre),
-      escapeCsvValue(r.scrapeMode),
-      escapeCsvValue(r.acquisitionStatus)
+      escapeCsvValue(r.scrapedAt)
     ].join(',') + '\n';
   });
   return csv;
@@ -105,9 +89,9 @@ function buildFilename(query, filterConfig, targetGenres) {
 
   let genres = [];
   if (Array.isArray(targetGenres)) {
-    genres = targetGenres.map(g => g.trim()).filter(g => MAP_TARGET_GENRE_SET.has(g));
+    genres = targetGenres.map(g => g.trim()).filter(Boolean);
   } else if (typeof targetGenres === 'string' && targetGenres.trim()) {
-    genres = targetGenres.split(/[\n,]/).map(g => g.trim()).filter(g => MAP_TARGET_GENRE_SET.has(g));
+    genres = targetGenres.split(/[\n,]/).map(g => g.trim()).filter(Boolean);
   }
   const genreStr = genres.map(g => sanitizeFilename(g)).filter(Boolean).join('_');
 
@@ -181,14 +165,6 @@ function splitAreaText(area) {
   };
 }
 
-function exportAreaParts(record, fallback = {}) {
-  const fallbackArea = splitAreaText(fallback.area || '');
-  const searchArea = splitAreaText(record.area || record.searchArea || '');
-  const pref = searchArea.prefecture || record.prefecture || fallback.prefecture || fallbackArea.prefecture || '';
-  const city = searchArea.city || record.city || fallback.city || fallbackArea.city || pref || '';
-  return { prefecture: pref, city };
-}
-
 function dedupeByUrl(data) {
   const seen = new Set();
   return data.filter(item => {
@@ -202,13 +178,13 @@ function dedupeByUrl(data) {
 
 function groupForCsvDownloads(data, fallback = {}) {
   const groups = new Map();
+  const fallbackArea = splitAreaText(fallback.area || '');
 
   data.forEach(item => {
-    const mapGenre = getMapTargetGenre(item, fallback);
-    if (!mapGenre) return;
     const r = normalizeExportRecord(item);
-    const { prefecture: pref, city } = exportAreaParts(r, fallback);
-    const genre = mapGenre;
+    const pref = r.prefecture || fallback.prefecture || fallbackArea.prefecture || '';
+    const city = r.city || fallback.city || fallbackArea.city || '';
+    const genre = r.genre || fallback.genre || r.searchGenre || 'ジャンル';
     const key = [pref, city, genre].join('\u0001');
 
     if (!groups.has(key)) {
@@ -228,6 +204,8 @@ async function downloadGroupedCsvFiles(data, fallback = {}) {
 
   for (const group of groups) {
     const filename = [
+      'googlemaps',
+      group.prefecture,
       group.city,
       group.genre,
       timestamp
@@ -250,36 +228,45 @@ async function appendV3Log(message) {
     logs.push(entry);
     if (logs.length > 500) logs.splice(0, logs.length - 500);
     await chrome.storage.local.set({ v3_logs: logs });
-    await safeRuntimeSendMessage({ action: 'v3_logPush', entry });
+    chrome.runtime.sendMessage({ action: 'v3_logPush', entry }).catch(() => { });
   } catch (_) { }
-}
-
-async function safeRuntimeSendMessage(message) {
-  try {
-    return await chrome.runtime.sendMessage(message);
-  } catch (error) {
-    const text = String(error?.message || error || '');
-    if (!text.includes('Receiving end does not exist') && !text.includes('Could not establish connection')) {
-      console.warn('[runtime message]', error);
-    }
-    return null;
-  }
 }
 
 async function downloadCsvFile(data, filename) {
   const encodedUri = 'data:text/csv;charset=utf-8,' + encodeURIComponent(buildCsvContent(data));
-  await chrome.downloads.download({ url: encodedUri, filename, saveAs: false });
+  // [FIX] 以前は chrome.downloads.download(...) をコールバックなしで await するだけで、
+  // 戻り値やエラーを一切確認していなかった。chrome.downloads.download は
+  // 「連続自動ダウンロードのブロック」等が発生した場合、例外を投げずに
+  // downloadId が undefined のまま解決することがあり、この場合は呼び出し側からは
+  // 正常終了したようにしか見えず、CSVが実際には出力されないままだった
+  // （食べログ側拡張機能で確認したのと同種の不具合）。
+  // downloadId を明示的に確認し、失敗時は例外を投げて呼び出し元（downloadGroupedCsvFiles
+  // → triggerV3GenreDownloadハンドラ）のtry/catchで検知できるようにする。
+  const downloadId = await new Promise((resolve, reject) => {
+    try {
+      chrome.downloads.download({ url: encodedUri, filename, saveAs: false }, id => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message || 'chrome.downloads.download failed'));
+          return;
+        }
+        resolve(id);
+      });
+    } catch (e) {
+      reject(e);
+    }
+  });
+  if (downloadId == null) {
+    throw new Error(`ダウンロードを開始できませんでした（filename: ${filename}）。Chromeの「複数ファイルの自動ダウンロード」がブロックされている可能性があります。`);
+  }
+  return downloadId;
 }
 
 function safeTabSendMessage(tabId, message) {
-  return new Promise(resolve => {
-    try {
-      chrome.tabs.sendMessage(tabId, message, response => {
-        if (chrome.runtime.lastError) return resolve(null);
-        resolve(response || null);
-      });
-    } catch (_) { resolve(null); }
-  });
+  try {
+    chrome.tabs.sendMessage(tabId, message, () => {
+      if (chrome.runtime.lastError) { /* Receiving end does not exist */ }
+    });
+  } catch (_) { /* ignore */ }
 }
 
 // =====================================================================
@@ -288,7 +275,7 @@ function safeTabSendMessage(tabId, message) {
 async function handleAutomaticDownload(tabId, data, filterConfig) {
   let query = '';
   try {
-    const res = await safeTabSendMessage(tabId, { action: 'getQuery' });
+    const res = await chrome.tabs.sendMessage(tabId, { action: 'getQuery' });
     query = res?.query || '';
   } catch (e) { /* ignore */ }
 
@@ -335,7 +322,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const unique = incoming.filter(i => i?.url && !existingUrls.has(i.url));
       const updated = [...current, ...unique];
 
-      chrome.storage.local.set({ scrapedData: updated, lastActivityAt: Date.now() }, () => {
+      chrome.storage.local.set({ scrapedData: updated }, () => {
+        // 容量超過(QUOTA_BYTES exceeded)等でset自体が失敗しても、
+        // 以前はここでチェックせず常にsuccess:trueを返していたため、
+        // データが保存されないまま「保存成功」として処理が続き、
+        // 気づかれずに件数が欠落するリスクがあった
+        if (chrome.runtime.lastError) {
+          console.error('[BG] scrapedData保存失敗:', chrome.runtime.lastError.message);
+          sendResponse({ success: false, count: current.length, error: chrome.runtime.lastError.message });
+          return;
+        }
         sendResponse({ success: true, count: updated.length });
       });
     });
@@ -343,15 +339,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === 'setState') {
-    chrome.storage.local.set({
-      scrapingState: request.state,
-      scrapingComboId: request.comboId || '',
-      lastActivityAt: Date.now(),
-      ...(request.error ? { scrapingError: request.error } : {})
-    }, async () => {
+    chrome.storage.local.set({ scrapingState: request.state }, async () => {
       if (request.state === 'active') {
         chrome.power.requestKeepAwake('display');
         chrome.alarms.create('keepAlive', { periodInMinutes: 0.5 });
+        // [FIX] currentRunIdは旧版popup.js（手動1回検索）の実行時にしか
+        // chrome.storage.localへ書き込まれておらず、v3オーケストレーター
+        // （エリア×ジャンル自動巡回）経由の実行では一度も設定されないまま
+        // だった。そのため下のdoneハンドラで毎回 `result.currentRunId || 'default_run'`
+        // が必ず固定文字列 'default_run' に落ち、Service Workerが生き続けている限り
+        // （keepAliveアラームで維持され続けるため実質ほぼ常時）2回目以降の
+        // 巡回が「重複ダウンロードとしてスキップ」され、CSVが一切出力されなく
+        // なる不具合の直接の原因になっていた
+        // （コンソールログ「[BG] Download for runId default_run already executed.
+        // Skipping duplicate.」で実際に確認）。
+        // スクレイピング開始のたびに一意なrunIdを新規発行して保存することで、
+        // 実行ごとに別キーとして扱われるようにする。
+        await new Promise(resolve => {
+          chrome.storage.local.set({
+            currentRunId: `run_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+          }, resolve);
+        });
       } else {
         chrome.power.releaseKeepAwake();
         chrome.alarms.clear('keepAlive');

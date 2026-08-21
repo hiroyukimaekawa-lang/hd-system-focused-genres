@@ -171,12 +171,6 @@ body {
   margin-top: 6px;
 }
 .v3-summary { font-size: 11px; color: #6b7280; margin-left: auto; }
-.v3-area-picker { margin: 8px 0 10px; }
-.v3-area-picker-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
 /* ---- ジャンルチェックボックス ---- */
 .v3-genres-container {
@@ -317,13 +311,3 @@ body {
   text-overflow: ellipsis;
   max-width: 180px;
 }
-
-/* keyword mode additions */
-.v3-status-badge{font-size:12px;font-weight:bold;padding:2px 8px;border-radius:4px;background:#f0f0f0;margin-left:6px;}
-.v3-stack{display:block;}
-.v3-stack .v3-label{display:block;margin-bottom:4px;}
-.v3-stack .v3-input{width:100%;box-sizing:border-box;}
-.v3-textarea{width:100%;min-height:96px;box-sizing:border-box;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:13px;resize:vertical;font-family:inherit;}
-.v3-preset-row{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;}
-.v3-preset{background:#f6f8fa;border:1px solid #d0d7de;border-radius:999px;cursor:pointer;}
-.v3-preset:hover{background:#e8f0fe;border-color:#1a73e8;}

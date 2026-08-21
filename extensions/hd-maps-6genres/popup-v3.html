@@ -7,100 +7,149 @@
 </head>
 <body>
   <div class="v3-container">
+
     <header class="v3-header">
       <h2>Google Maps 飲食6ジャンル限定版 <span class="v3-badge">focused</span></h2>
-      <p class="v3-subtitle">地域と対象ジャンルを選択して店舗情報を取得 <span id="v3-status-badge" class="v3-status-badge">待機中</span></p>
+      <p class="v3-subtitle">エリア × 対象6ジャンル 自動取得モード &nbsp;<span id="v3-status-badge" style="font-size:12px;font-weight:bold;padding:2px 8px;border-radius:4px;background:#f0f0f0;">待機中</span></p>
     </header>
 
+    <!-- ① エリア入力 -->
     <section class="v3-panel">
-      <h3>1. 地域を選択</h3>
+      <h3>1. エリア指定</h3>
       <div class="v3-form-row">
-        <input type="text" id="v3-city-input" class="v3-input" placeholder="例: 福岡市">
-        <button type="button" id="v3-fetch-areas" class="v3-btn v3-btn-primary">区を取得</button>
+        <input type="text" id="v3-city-input" class="v3-input" placeholder="例: さいたま市 / 横浜市 / 大阪市">
+        <button id="v3-load-areas" class="v3-btn v3-btn-primary">区を取得</button>
       </div>
-      <div class="v3-helper">※「市」を含めて入力してください。例: さいたま市、福岡市</div>
-      <div id="v3-area-picker" class="v3-area-picker" hidden>
-        <div class="v3-area-picker-head">
-          <span class="v3-label">取得対象エリア</span>
-          <span class="v3-summary" id="v3-area-summary"></span>
-        </div>
-        <div class="v3-areas-actions">
-          <button type="button" id="v3-area-all" class="v3-btn-sm">全選択</button>
-          <button type="button" id="v3-area-clear" class="v3-btn-sm">全解除</button>
-        </div>
-        <div id="v3-areas-container" class="v3-areas-container empty">
-          <span class="v3-empty">市名を入力して「区を取得」を押してください。</span>
-        </div>
+      <div class="v3-helper">※通常市は市全体、政令指定都市は区単位で取得できます。例: 長野県茅野市 / さいたま市</div>
+      <div id="v3-areas-container" class="v3-areas-container">
+        <div class="v3-empty">エリアを入力して「区を取得」を押すと、ここにチェックボックスが表示されます。未選択のまま開始すると<b>全区</b>が対象になります。</div>
+      </div>
+      <div class="v3-areas-actions" id="v3-areas-actions" style="display:none">
+        <button id="v3-select-all" class="v3-btn-sm">全選択</button>
+        <button id="v3-clear-all" class="v3-btn-sm">全解除</button>
+        <span id="v3-areas-summary" class="v3-summary"></span>
       </div>
     </section>
 
+    <!-- ② ジャンル一覧（選択式） -->
     <section class="v3-panel">
-      <h3>2. 取得ジャンル</h3>
-      <div class="v3-genres-actions">
-        <button type="button" id="v3-genre-all" class="v3-btn-sm">全選択</button>
-        <button type="button" id="v3-genre-clear" class="v3-btn-sm">全解除</button>
-        <span class="v3-summary" id="v3-genre-summary"></span>
+      <h3>2. 取得対象ジャンル</h3>
+      <div class="v3-helper" style="margin-bottom:6px;">
+        ※チェックを入れたジャンルのみ取得対象になります。未選択の場合は<b>全ジャンル</b>が対象になります。
       </div>
-      <div id="v3-genres-container" class="v3-genres-container"></div>
-      <div class="v3-helper">カフェ、スイーツ、居酒屋、スナック、バー、焼き鳥のみ取得します。</div>
+      <div id="v3-genres-container" class="v3-genres-container">
+        <span class="v3-empty">読み込み中...</span>
+      </div>
+      <div class="v3-genres-actions" id="v3-genres-actions" style="display:none">
+        <button id="v3-genre-select-all" class="v3-btn-sm">全選択</button>
+        <button id="v3-genre-clear-all" class="v3-btn-sm">全解除</button>
+        <span id="v3-genres-summary" class="v3-summary"></span>
+      </div>
     </section>
 
+    <!-- ③ 制御ボタン -->
     <section class="v3-panel">
-      <h3>3. 実行設定</h3>
+      <h3>3. 実行</h3>
       <div class="v3-form-row">
         <label class="v3-label" for="v3-scrape-mode">取得モード</label>
         <select id="v3-scrape-mode" class="v3-input">
-          <option value="fast">高速</option>
           <option value="standard" selected>標準</option>
+          <option value="fast">高速</option>
           <option value="exhaustive">網羅</option>
         </select>
       </div>
-      <input type="hidden" id="v3-range-mode" value="whole">
       <div class="v3-form-row">
-        <label class="v3-label">最大取得件数: <span id="v3-max-val">100</span>件</label>
+        <label class="v3-label" for="v3-range-mode">取得範囲</label>
+        <select id="v3-range-mode" class="v3-input">
+          <option value="split" selected>小エリア分割</option>
+          <option value="whole">市区町村全域</option>
+          <option value="manual">手動エリア指定</option>
+        </select>
       </div>
-      <input type="range" id="v3-max-items" min="10" max="500" step="10" value="100" class="v3-range">
+      <div class="v3-form-row">
+        <label class="v3-label">1コンボ最大件数: <span id="v3-max-val">100</span>件</label>
+      </div>
+      <input type="range" id="v3-max-items" min="20" max="500" step="10" value="100" class="v3-range">
       <div class="v3-btn-group">
-        <button id="v3-start" class="v3-btn v3-btn-primary v3-btn-lg">▶ 取得開始</button>
-        <button id="v3-stop" class="v3-btn v3-btn-danger v3-btn-lg" disabled>■ STOP</button>
+        <button id="v3-start" class="v3-btn v3-btn-primary v3-btn-lg">▶ 自動取得開始</button>
+        <button id="v3-stop" class="v3-btn v3-btn-danger v3-btn-lg" disabled>■ STOP（停止）</button>
       </div>
       <div class="v3-btn-group">
-        <button id="v3-download-csv" class="v3-btn v3-btn-success" disabled>⬇ CSV</button>
-        <button id="v3-download-xlsx" class="v3-btn v3-btn-success" disabled>⬇ XLSX</button>
+        <button id="v3-download-csv" class="v3-btn v3-btn-success" disabled>⬇ CSVダウンロード</button>
+        <button id="v3-download-xlsx" class="v3-btn v3-btn-success" disabled>⬇ XLSXダウンロード</button>
         <button id="v3-reset" class="v3-btn v3-btn-secondary">↺ リセット</button>
       </div>
     </section>
 
+    <!-- ④ 進捗パネル -->
     <section class="v3-panel v3-progress-panel">
-      <h3>4. 進捗</h3>
+      <h3>4. リアルタイム進捗</h3>
+
       <div class="v3-grid">
-        <div class="v3-cell"><div class="v3-cell-label">現在エリア</div><div class="v3-cell-val" id="v3-cur-area">-</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">検索キーワード</div><div class="v3-cell-val" id="v3-cur-genre">-</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">タスク</div><div class="v3-cell-val" id="v3-area-progress">0 / 0</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">ジャンル</div><div class="v3-cell-val" id="v3-genre-progress">-</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">取得件数</div><div class="v3-cell-val v3-emph" id="v3-total-count">0件</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">処理時間</div><div class="v3-cell-val" id="v3-elapsed">00:00:00</div></div>
-        <div class="v3-cell"><div class="v3-cell-label">推定残り</div><div class="v3-cell-val" id="v3-eta">--:--:--</div></div>
-        <div class="v3-cell v3-cell-wide"><div class="v3-cell-label">検索クエリ</div><div class="v3-cell-val" id="v3-cur-keyword">-</div></div>
-        <div class="v3-cell v3-cell-wide"><div class="v3-cell-label">アクセス中URL</div><div class="v3-cell-val v3-url" id="v3-cur-url">-</div></div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">現在エリア</div>
+          <div class="v3-cell-val" id="v3-cur-area">-</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">現在ジャンル</div>
+          <div class="v3-cell-val" id="v3-cur-genre">-</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">区</div>
+          <div class="v3-cell-val" id="v3-area-progress">0 / 0</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">ジャンル</div>
+          <div class="v3-cell-val" id="v3-genre-progress">0 / 0</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">取得件数</div>
+          <div class="v3-cell-val v3-emph" id="v3-total-count">0件</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">処理時間</div>
+          <div class="v3-cell-val" id="v3-elapsed">00:00:00</div>
+        </div>
+        <div class="v3-cell">
+          <div class="v3-cell-label">推定残り時間</div>
+          <div class="v3-cell-val" id="v3-eta">--:--:--</div>
+        </div>
+        <div class="v3-cell v3-cell-wide">
+          <div class="v3-cell-label">現在の検索キーワード</div>
+          <div class="v3-cell-val" id="v3-cur-keyword">-</div>
+        </div>
+        <div class="v3-cell v3-cell-wide">
+          <div class="v3-cell-label">アクセス中URL</div>
+          <div class="v3-cell-val v3-url" id="v3-cur-url">-</div>
+        </div>
       </div>
+
       <div class="v3-bar-wrap"><div class="v3-bar" id="v3-bar"></div></div>
     </section>
 
+    <!-- ⑤ ログ -->
     <section class="v3-panel">
       <h3>5. ログ</h3>
       <div id="v3-log" class="v3-log"></div>
     </section>
 
+    <!-- ⑥ プレビュー（最新20件） -->
     <section class="v3-panel">
-      <h3>6. 取得結果プレビュー <span class="v3-summary" id="v3-preview-summary"></span></h3>
+      <h3>6. 取得結果プレビュー（最新20件）<span class="v3-summary" id="v3-preview-summary"></span></h3>
       <div class="v3-table-wrap">
         <table class="v3-table">
-          <thead><tr><th>店名</th><th>ジャンル</th><th>住所</th></tr></thead>
+          <thead>
+            <tr>
+              <th>店名</th>
+              <th>ジャンル</th>
+              <th>住所</th>
+            </tr>
+          </thead>
           <tbody id="v3-preview-body"></tbody>
         </table>
       </div>
     </section>
+
   </div>
   <script src="popup-v3.js"></script>
 </body>
