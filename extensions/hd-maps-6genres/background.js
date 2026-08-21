@@ -1,6 +1,13 @@
 // background.js  v3.4.0 (共通スキーマ対応版)
 
 const downloadedRunIds = new Set();
+const MAP_TARGET_GENRES = Object.freeze(['カフェ', 'スイーツ', '居酒屋', 'スナック', 'バー', '焼き鳥']);
+const MAP_TARGET_GENRE_SET = new Set(MAP_TARGET_GENRES);
+
+function getMapTargetGenre(item = {}, fallback = {}) {
+  const genre = String(item.outputGenre || item.genre || item.searchGenre || fallback.genre || '').trim();
+  return MAP_TARGET_GENRE_SET.has(genre) ? genre : '';
+}
 
 // =====================================================================
 // CSVヘッダー定義 (共通スキーマ + デバッグ項目)
@@ -98,9 +105,9 @@ function buildFilename(query, filterConfig, targetGenres) {
 
   let genres = [];
   if (Array.isArray(targetGenres)) {
-    genres = targetGenres.map(g => g.trim()).filter(Boolean);
+    genres = targetGenres.map(g => g.trim()).filter(g => MAP_TARGET_GENRE_SET.has(g));
   } else if (typeof targetGenres === 'string' && targetGenres.trim()) {
-    genres = targetGenres.split(/[\n,]/).map(g => g.trim()).filter(Boolean);
+    genres = targetGenres.split(/[\n,]/).map(g => g.trim()).filter(g => MAP_TARGET_GENRE_SET.has(g));
   }
   const genreStr = genres.map(g => sanitizeFilename(g)).filter(Boolean).join('_');
 
@@ -197,9 +204,11 @@ function groupForCsvDownloads(data, fallback = {}) {
   const groups = new Map();
 
   data.forEach(item => {
+    const mapGenre = getMapTargetGenre(item, fallback);
+    if (!mapGenre) return;
     const r = normalizeExportRecord(item);
     const { prefecture: pref, city } = exportAreaParts(r, fallback);
-    const genre = r.genre || fallback.genre || r.searchGenre || 'ジャンル';
+    const genre = mapGenre;
     const key = [pref, city, genre].join('\u0001');
 
     if (!groups.has(key)) {

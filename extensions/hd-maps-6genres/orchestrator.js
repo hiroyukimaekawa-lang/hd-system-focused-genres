@@ -43,6 +43,15 @@ const V3K = {
 };
 
 const V3_LOG_MAX = 500;
+const MAP_TARGET_GENRES = Object.freeze([
+  'カフェ',
+  'スイーツ',
+  '居酒屋',
+  'スナック',
+  'バー',
+  '焼き鳥'
+]);
+const MAP_TARGET_GENRE_SET = new Set(MAP_TARGET_GENRES);
 const V3_MODE_CONFIG = {
   fast: { label: '高速', cityMax: 30, subAreaMax: 5, maxScrolls: 30, maxEmptyScrolls: 2, timeoutMs: 5 * 60 * 1000, minScore: 50 },
   standard: { label: '標準', cityMax: 80, subAreaMax: 10, maxScrolls: 60, maxEmptyScrolls: 3, timeoutMs: 15 * 60 * 1000, minScore: 30 },
@@ -278,7 +287,15 @@ async function buildTargetAreasForRun(city, selectedAreas, rangeMode) {
 
 async function getGenres() {
   const data = await loadJson('config/genres.json');
-  return (data && Array.isArray(data.genres)) ? data.genres.slice() : [];
+  const configured = data && Array.isArray(data.genres) ? data.genres : [];
+  const configuredSet = new Set(configured);
+  return MAP_TARGET_GENRES.filter(genre => configuredSet.has(genre));
+}
+
+function filterMapTargetGenres(genres) {
+  return [...new Set((Array.isArray(genres) ? genres : [])
+    .map(genre => String(genre || '').trim())
+    .filter(genre => MAP_TARGET_GENRE_SET.has(genre)))];
 }
 
 // ---- タブ管理 ----------------------------------------------
@@ -846,7 +863,16 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           keyword: String(t?.keyword || '').trim(),
           outputGenre: String(t?.outputGenre || t?.keyword || '').trim()
         }))
-        .filter(t => t.area && t.keyword && t.outputGenre);
+        .filter(t => (
+          t.area &&
+          MAP_TARGET_GENRE_SET.has(t.keyword) &&
+          MAP_TARGET_GENRE_SET.has(t.outputGenre)
+        ));
+
+      if (inputTasks.length && !tasks.length) {
+        sendResponse({ ok: false, error: 'Google Maps取得対象の6ジャンルが指定されていません' });
+        return;
+      }
 
       if (tasks.length) {
         await v3Set({
@@ -873,10 +899,11 @@ chrome.runtime.onMessage.addListener((req, sender, sendResponse) => {
           v3_runId: runId,
           v3_stopReason: ''
         });
-        await v3Log(`任意キーワード取得開始: ${tasks.length}タスク | モード ${V3_MODE_CONFIG[scrapeMode].label} | runId: ${runId}`);
+        await v3Log(`Google Maps対象6ジャンル取得開始: ${tasks.length}タスク | モード ${V3_MODE_CONFIG[scrapeMode].label} | runId: ${runId}`);
       } else {
         let useAreas = await buildTargetAreasForRun(city || '', areas || [], rangeMode);
-        const useGenres = genres && genres.length ? genres : await getGenres();
+        const requestedGenres = filterMapTargetGenres(genres);
+        const useGenres = requestedGenres.length ? requestedGenres : await getGenres();
         await v3Set({
           [V3K.state]: 'running',
           [V3K.city]: city || '',

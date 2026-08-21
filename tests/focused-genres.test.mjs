@@ -32,6 +32,66 @@ test('Google Maps popup uses focused genre selection UI', () => {
   assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
 });
 
+test('Google Maps enforces the six target genres through UI, tasks, progress, and CSV routing', () => {
+  const orchestrator = read('extensions/hd-maps-6genres/orchestrator.js');
+  const popup = read('extensions/hd-maps-6genres/popup-v3.js');
+  const background = read('extensions/hd-maps-6genres/background.js');
+  const expectedLiteral = /'カフェ'[\s\S]*'スイーツ'[\s\S]*'居酒屋'[\s\S]*'スナック'[\s\S]*'バー'[\s\S]*'焼き鳥'/;
+
+  for (const [name, source] of [['orchestrator', orchestrator], ['popup', popup], ['background', background]]) {
+    assert.match(source, /const MAP_TARGET_GENRES = Object\.freeze\(/, name);
+    assert.match(source, expectedLiteral, name);
+    assert.doesNotMatch(source, /MAP_TARGET_GENRES[^;]*美容院/, name);
+  }
+
+  assert.match(popup, /availableGenres = MAP_TARGET_GENRES\.filter/);
+  assert.match(popup, /selectedGenres = selectedGenres\.filter\(genre => MAP_TARGET_GENRE_SET\.has\(genre\)\)/);
+  assert.match(orchestrator, /MAP_TARGET_GENRE_SET\.has\(t\.keyword\)/);
+  assert.match(orchestrator, /MAP_TARGET_GENRE_SET\.has\(t\.outputGenre\)/);
+  assert.match(orchestrator, /const requestedGenres = filterMapTargetGenres\(genres\)/);
+  assert.match(background, /const mapGenre = getMapTargetGenre\(item, fallback\);\s*if \(!mapGenre\) return/);
+});
+
+test('Google Maps does not generate a beauty-salon task or export group', () => {
+  const orchestrator = read('extensions/hd-maps-6genres/orchestrator.js');
+  const popup = read('extensions/hd-maps-6genres/popup-v3.js');
+  const background = read('extensions/hd-maps-6genres/background.js');
+  assert.equal(orchestrator.includes("'美容院'"), false);
+  assert.equal(popup.includes("'美容院'"), false);
+  assert.equal(background.includes("'美容院'"), false);
+});
+
+test('Google Maps runtime filters reject beauty salons while retaining all six genres', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const orchestrator = read('extensions/hd-maps-6genres/orchestrator.js');
+  const orchestratorEnd = orchestrator.indexOf('// ---- タブ管理');
+  const orchestratorContext = {};
+  runInNewContext(
+    `${orchestrator.slice(0, orchestratorEnd)}\nthis.filterMapTargetGenres = filterMapTargetGenres;`,
+    orchestratorContext
+  );
+  assert.deepEqual(
+    Array.from(orchestratorContext.filterMapTargetGenres([...focusedGenres, '美容院', '美容室', 'カフェ'])),
+    focusedGenres
+  );
+
+  const background = read('extensions/hd-maps-6genres/background.js');
+  const backgroundEnd = background.indexOf('async function downloadGroupedCsvFiles');
+  const backgroundContext = {};
+  runInNewContext(
+    `${background.slice(0, backgroundEnd)}\nthis.groupForCsvDownloads = groupForCsvDownloads;`,
+    backgroundContext
+  );
+  const groups = Array.from(backgroundContext.groupForCsvDownloads([
+    { name: '喫茶', outputGenre: 'カフェ', url: 'cafe' },
+    { name: '美容室', outputGenre: '美容院', searchGenre: 'カフェ', url: 'salon' }
+  ]));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].genre, 'カフェ');
+  assert.equal(groups[0].items.length, 1);
+  assert.equal(groups[0].items[0].name, '喫茶');
+});
+
 test('Google Maps integrity guard blocks stale detail fields', () => {
   const guard = read('extensions/hd-maps-6genres/integrity-guard.js');
   assert.match(guard, /waitForPanelFieldsReady = strictWaitForPanelFieldsReady/);

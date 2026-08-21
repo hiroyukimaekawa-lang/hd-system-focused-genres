@@ -28,6 +28,16 @@ const V3K = {
 };
 V3K.selectedGenres = 'v3_selectedGenres';
 
+const MAP_TARGET_GENRES = Object.freeze([
+  'カフェ',
+  'スイーツ',
+  '居酒屋',
+  'スナック',
+  'バー',
+  '焼き鳥'
+]);
+const MAP_TARGET_GENRE_SET = new Set(MAP_TARGET_GENRES);
+
 const OUTPUT_HEADERS = [
   '店名', 'ジャンル', '検索ジャンル', '取得元ジャンル', '都道府県', '市区町村', '住所', '電話番号',
   '定休日', '営業日', '営業開始A', '営業終了A', '営業開始B', '営業終了B',
@@ -152,7 +162,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function loadGenres() {
     const res = await sendMsg({ action: 'v3_getGenres' });
-    availableGenres = res && res.ok && Array.isArray(res.genres) ? res.genres : [];
+    const receivedGenres = res && res.ok && Array.isArray(res.genres) ? res.genres : [];
+    const receivedSet = new Set(receivedGenres);
+    availableGenres = MAP_TARGET_GENRES.filter(genre => receivedSet.has(genre));
     selectedGenres = selectedGenres.filter(genre => availableGenres.includes(genre));
     if (!selectedGenres.length) selectedGenres = availableGenres.slice();
     persistSelectedGenres();
@@ -240,6 +252,7 @@ document.addEventListener('DOMContentLoaded', () => {
   btnStart.addEventListener('click', async () => {
     const area = elCity.value.trim();
     if (!area) { alert('エリアを入力してください'); return; }
+    selectedGenres = selectedGenres.filter(genre => MAP_TARGET_GENRE_SET.has(genre));
     if (!selectedGenres.length) { alert('取得するジャンルを選択してください'); return; }
     if (normalizeAreaText(area) !== fetchedAreaInput) { alert('先に「区を取得」を押してください'); return; }
     if (!selectedAreas.length) { alert('取得するエリアを選択してください'); return; }
