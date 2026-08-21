@@ -20,15 +20,25 @@ test('Google Maps popup uses focused genre selection UI', () => {
   const manifest = JSON.parse(read('extensions/hd-maps-6genres/manifest.json'));
   const popupHtml = read('extensions/hd-maps-6genres/popup-v3.html');
   const popupJs = read('extensions/hd-maps-6genres/popup-v3.js');
-  assert.equal(manifest.version, '5.3.0');
+  assert.equal(manifest.version, '5.3.1');
   assert.equal(manifest.name, '【限定版】HD Maps 6ジャンル');
   assert.equal(manifest.action.default_title, '【限定版】HD Maps 6ジャンル');
+  assert.deepEqual(manifest.content_scripts[0].js, ['content.js', 'integrity-guard.js']);
   assert.match(popupHtml, /id="v3-genres-container"/);
   assert.match(popupHtml, /id="v3-fetch-areas"/);
   assert.match(popupHtml, />区を取得</);
   assert.doesNotMatch(popupHtml, /id="v3-area-group-select"/);
   assert.doesNotMatch(popupHtml, /id="v3-keyword-input"/);
   assert.match(popupJs, /targetAreas\.flatMap\(targetArea => selectedGenres\.map/);
+});
+
+test('Google Maps integrity guard blocks stale detail fields', () => {
+  const guard = read('extensions/hd-maps-6genres/integrity-guard.js');
+  assert.match(guard, /waitForPanelFieldsReady = strictWaitForPanelFieldsReady/);
+  assert.match(guard, /phone_reused_by_different_place/);
+  assert.match(guard, /phone_mismatch/);
+  assert.match(guard, /address_mismatch/);
+  assert.match(guard, /urlMatches && nameMatches/);
 });
 
 test('Tabelog crawl is limited to five source categories producing six final genres', () => {
