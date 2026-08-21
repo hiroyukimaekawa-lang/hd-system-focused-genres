@@ -38,7 +38,9 @@ test('Google Maps integrity guard blocks stale detail fields', () => {
   assert.match(guard, /phone_reused_by_different_place/);
   assert.match(guard, /phone_mismatch/);
   assert.match(guard, /address_mismatch/);
-  assert.match(guard, /urlMatches && nameMatches/);
+  assert.match(guard, /extractGooglePlaceIdentity/);
+  assert.match(guard, /return expectedUrlNormalized \? urlMatches : nameMatches/);
+  assert.match(guard, /NON_PLACE_TITLES/);
 });
 
 test('Tabelog crawl is limited to five source categories producing six final genres', () => {
@@ -138,4 +140,54 @@ test('completion watcher is registered before startScraping and uses comboId hea
   assert.ok(watcher > 0 && start > watcher);
   assert.match(source, /scrapingComboId: comboId/);
   assert.match(source, /lastActivityAt: Date\.now\(\)/);
+});
+
+test('Google Maps detail title is read from the address-containing panel, not the Results h1', async () => {
+  const { runInNewContext } = await import('node:vm');
+  const source = read('extensions/hd-maps-6genres/content.js');
+  const helperEnd = source.indexOf('// DOM要素が現れるまで待つ');
+  assert.ok(helperEnd > 0);
+
+  const placeTitle = { textContent: 'テスト喫茶店' };
+  const detailContainer = {
+    parentElement: null,
+    querySelectorAll(selector) {
+      return selector === 'h1' || selector === 'h1.DUwDvf' ? [placeTitle] : [];
+    }
+  };
+  const addressButton = { parentElement: detailContainer };
+  const document = {
+    querySelector(selector) {
+      if (selector === '[role="main"] h1') return { textContent: '結果' };
+      if (selector === 'button[data-item-id="address"]') return addressButton;
+      return null;
+    }
+  };
+  const context = { document, setTimeout, clearTimeout, Promise, Date, Error };
+  runInNewContext(`${source.slice(0, helperEnd)}\nthis.hooks = { getDetailPanelTitle, isUsablePlaceTitle, extractGooglePlaceIdentity };`, context);
+
+  assert.equal(context.hooks.getDetailPanelTitle(), 'テスト喫茶店');
+  assert.equal(context.hooks.isUsablePlaceTitle('結果'), false);
+  assert.equal(context.hooks.isUsablePlaceTitle('検索結果'), false);
+  assert.equal(context.hooks.isUsablePlaceTitle('Results'), false);
+  assert.equal(
+    context.hooks.extractGooglePlaceIdentity('https://www.google.com/maps/place/x/data=!4m2!3m1!1s0x60188abc:0xDEADBEEF'),
+    '0x60188abc:0xdeadbeef'
+  );
+  assert.equal(
+    context.hooks.extractGooglePlaceIdentity('https://www.google.com/maps/place/x/data=!3m1!5s0x111:0x222!4m3!1s0x60188abc:0xDEADBEEF!8m2'),
+    '0x60188abc:0xdeadbeef'
+  );
+});
+
+test('detail queue has a hard timeout and advances in finally on every outcome', () => {
+  const source = read('extensions/hd-maps-6genres/content.js');
+  assert.match(source, /const DETAIL_ITEM_HARD_TIMEOUT_MS = 8000/);
+  assert.match(source, /await runItemWithHardTimeout\(itemRun, async \(\) =>/);
+  assert.match(source, /finally \{\s*itemRun\.cancelled = true;\s*processedUrls\.add\(url\);\s*queuedOrProcessingUrls\.delete\(url\);\s*completeQueueItem\(url, '処理完了'\)/);
+  assert.match(source, /`\[\$\{queueProcessed\}\/\$\{queueTotal\}\]/);
+  assert.match(source, /queueProcessed=\$\{queueProcessed\} \/ queueTotal=\$\{queueTotal\}/);
+  assert.match(source, /while \(!stopRequested && queueProcessed < queueTotal\)/);
+  assert.match(source, /if \(precollectedIndex < precollectedItems\.length\) continue/);
+  assert.doesNotMatch(source, /while \(cardQueue\.length && !stopRequested && totalProcessed < effectiveMaxItems\)/);
 });

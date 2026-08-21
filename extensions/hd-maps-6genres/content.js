@@ -14,6 +14,67 @@ function backgroundSleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+const NON_PLACE_TITLES = new Set(['結果', '検索結果', 'results', 'search results']);
+const DETAIL_ITEM_HARD_TIMEOUT_MS = 8000;
+
+function isUsablePlaceTitle(value) {
+  const title = String(value || '').normalize('NFKC').trim();
+  return !!title && !NON_PLACE_TITLES.has(title.toLowerCase());
+}
+
+function extractGooglePlaceIdentity(url) {
+  const text = String(url || '');
+  const placeMatch = text.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+  if (placeMatch) return placeMatch[1].toLowerCase();
+  const matches = text.match(/0x[0-9a-f]+:0x[0-9a-f]+/ig);
+  return matches?.length ? matches[matches.length - 1].toLowerCase() : '';
+}
+
+function getDetailPanelContainer() {
+  const anchors = [
+    document.querySelector('button[data-item-id="address"]'),
+    document.querySelector('button[data-item-id^="phone:tel:"]'),
+    document.querySelector('button[data-item-id="oh"]')
+  ].filter(Boolean);
+  for (const anchor of anchors) {
+    let node = anchor.parentElement;
+    for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+      if (Array.from(node.querySelectorAll('h1')).some(el => isUsablePlaceTitle(el.textContent))) return node;
+    }
+  }
+  return null;
+}
+
+function getDetailPanelTitle() {
+  const container = getDetailPanelContainer();
+  if (!container) return '';
+  for (const selector of ['h1.DUwDvf', 'h1', '[role="heading"][aria-level="1"]']) {
+    const title = Array.from(container.querySelectorAll(selector))
+      .map(el => el.textContent?.trim() || '')
+      .find(isUsablePlaceTitle);
+    if (title) return title;
+  }
+  return '';
+}
+
+function assertItemRunActive(itemRun) {
+  if (itemRun.cancelled || Date.now() >= itemRun.deadline) {
+    itemRun.cancelled = true;
+    throw new Error(`detail_item_hard_timeout: ${itemRun.url}`);
+  }
+}
+
+function runItemWithHardTimeout(itemRun, work) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      itemRun.cancelled = true;
+      reject(new Error(`detail_item_hard_timeout: ${itemRun.url}`));
+    }, DETAIL_ITEM_HARD_TIMEOUT_MS);
+  });
+  return Promise.race([work(), timeout]).finally(() => clearTimeout(timer));
+}
+
 // DOM要素が現れるまで待つ（動的待機）
 function waitForElement(selector, timeoutMs = 3000) {
   return new Promise(resolve => {
@@ -35,12 +96,14 @@ function waitUntilPanelChanged(previousName, previousUrl, timeoutMs = 4000) {
   return new Promise(resolve => {
     const deadline = Date.now() + timeoutMs;
     const iv = setInterval(() => {
-      const currentName = (document.querySelector('[role="main"] h1')?.textContent?.trim()) || '';
+      const currentName = getDetailPanelTitle();
       const currentUrl  = window.location.href;
+      const previousIdentity = extractGooglePlaceIdentity(previousUrl);
+      const currentIdentity = extractGooglePlaceIdentity(currentUrl);
       if (
         Date.now() >= deadline
-        || (currentName && currentName !== previousName && currentName !== '結果')
-        || (currentUrl !== previousUrl && currentUrl.includes('/maps/place/'))
+        || (isUsablePlaceTitle(currentName) && currentName !== previousName)
+        || (currentIdentity && currentIdentity !== previousIdentity)
       ) {
         clearInterval(iv);
         resolve({ name: currentName, url: currentUrl });
@@ -50,7 +113,7 @@ function waitUntilPanelChanged(previousName, previousUrl, timeoutMs = 4000) {
 }
 
 function getCurrentPanelName() {
-  return (document.querySelector('[role="main"] h1')?.textContent?.trim()) || '';
+  return getDetailPanelTitle();
 }
 
 function getCurrentPanelAddress() {
@@ -93,16 +156,19 @@ async function waitForPanelFieldsReady(options = {}, timeoutMs = 5500) {
     const currentName = getCurrentPanelName();
     const currentUrl = window.location.href;
     const currentAddress = getCurrentPanelAddress();
-    const usableName = currentName && currentName !== '結果';
+    const usableName = isUsablePlaceTitle(currentName);
+    const expectedIdentity = extractGooglePlaceIdentity(expectedUrl);
+    const currentIdentity = extractGooglePlaceIdentity(currentUrl);
     const identityChanged =
       (usableName && currentName !== previousName) ||
       (currentUrl !== previousUrl && currentUrl.includes('/maps/place/'));
     const nameMatches =
       expectedNames.length === 0 ||
       expectedNames.some(name => isLikelySamePlaceName(currentName, name));
-    const panelLooksUsable = usableName || currentUrl.includes('/maps/place/');
+    const identityMatches = expectedIdentity && currentIdentity === expectedIdentity;
+    const panelLooksUsable = identityMatches || usableName;
 
-    if (panelLooksUsable && (identityChanged || nameMatches)) {
+    if (panelLooksUsable && (identityMatches || identityChanged || nameMatches)) {
       if (!identityReadyAt) identityReadyAt = Date.now();
 
       if (currentAddress) {
@@ -769,19 +835,12 @@ function isClosedBusinessStatus(businessStatus) {
 // 詳細パネルスクレイピング (改善版: 動的待機・phoneStatus/hasWebsiteStatus付き)
 // =====================================================================
 async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
-  // 店名確認: 前店舗でないか、正しいパネルが開いているか確認（動的待機）
-  let name = cardName;
-  if (cardName) {
-    const panelNameEl = await waitForElement('[role="main"] h1', 3000);
-    if (panelNameEl) {
-      name = panelNameEl.textContent.trim();
-      if (!name || name === '結果') name = cardName;
-    }
-  } else {
-    const panelNameEl = await waitForElement('[role="main"] h1', 2000);
-    name = panelNameEl?.textContent?.trim() || extractNameFromUrl(placeUrl);
-    if (!name || name === '結果') name = extractNameFromUrl(placeUrl);
-  }
+  // document全体の先頭h1（「結果」）ではなく、住所/電話を含む詳細コンテナのタイトルを使う。
+  const panelTitle = getDetailPanelTitle();
+  let name = isUsablePlaceTitle(panelTitle)
+    ? panelTitle
+    : (isUsablePlaceTitle(cardName) ? cardName : extractNameFromUrl(placeUrl));
+  if (!isUsablePlaceTitle(name)) name = '';
 
   const googleGenre = extractRawGenreFromPanel();
   const genre = normalizeGenre(googleGenre, searchGenre);
@@ -795,7 +854,9 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
 
   // 住所（動的待機）
   let address = '';
-  const addrBtn = await waitForElement('button[data-item-id="address"]', 3000);
+  const detailContainer = getDetailPanelContainer();
+  const addrBtn = detailContainer?.querySelector('button[data-item-id="address"]')
+    || document.querySelector('button[data-item-id="address"]');
   if (addrBtn) {
     const raw = addrBtn.getAttribute('aria-label') || addrBtn.textContent.trim();
     address = raw.replace(/^住所[：:]\s*/, '').trim();
@@ -804,7 +865,8 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
   // 電話番号 + phoneStatus（動的待機）
   let phone = '';
   let phoneStatus = 'missing';
-  const phoneBtn = await waitForElement('button[data-item-id^="phone:tel:"]', 2500);
+  const phoneBtn = detailContainer?.querySelector('button[data-item-id^="phone:tel:"]')
+    || document.querySelector('button[data-item-id^="phone:tel:"]');
   if (phoneBtn) {
     const itemId = phoneBtn.getAttribute('data-item-id') || '';
     phone = itemId.replace('phone:tel:', '').trim() || phoneBtn.textContent.trim();
@@ -851,7 +913,7 @@ async function scrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
 
   // 営業時間 (動的待機でtableが開くのを待つ)
   if (hoursToggle) {
-    await waitForElement('tr', 1500);
+    await waitForElement('tr', 600);
   }
 
   const rawHourRows = Array.from(document.querySelectorAll('tr'))
@@ -1574,6 +1636,17 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   const cardQueue = [];
   const precollectedItems = collectedResult.items;
   let precollectedIndex = 0;
+  const completedQueueUrls = new Set();
+  const queueTotal = precollectedItems.length;
+  let queueProcessed = 0;
+
+  function completeQueueItem(url, outcome) {
+    const key = url || `missing_${queueProcessed}`;
+    if (completedQueueUrls.has(key)) return;
+    completedQueueUrls.add(key);
+    queueProcessed++;
+    reportV3Log(`[${queueProcessed}/${queueTotal}] ${outcome}: ${url || '(URLなし)'}`);
+  }
 
   // =====================================================================
   // カードキュー構築（DOM参照を持たず情報のみ）
@@ -1587,18 +1660,23 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         const item = { ...sourceItem, scrollBatch: queueBatchNo };
         const url = item.url;
 
-        if (!url || processedUrls.has(url) || queuedOrProcessingUrls.has(url)) continue;
+        if (!url || processedUrls.has(url) || queuedOrProcessingUrls.has(url)) {
+          completeQueueItem(url, 'スキップ');
+          continue;
+        }
 
         const existing = existingRecords.get(url);
         if (existing && isCompleteRecord(existing)) {
           speedStats.skippedComplete++;
           logSkip(item, '完全取得済み', item.name || existing.name || url);
+          completeQueueItem(url, '取得済み');
           continue;
         }
 
         if (existing && existing.phoneStatus === 'not_available' && existing.hasWebsiteStatus !== 'unknown' && isCompleteRecord(existing)) {
           speedStats.skippedNotAvailable++;
           logSkip(item, '掲載なしスキップ', item.name || existing.name || url);
+          completeQueueItem(url, '掲載なし取得済み');
           continue;
         }
 
@@ -1610,6 +1688,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
         if ((attemptCounts.get(url) || 0) >= 2) {
           logSkip(item, '詳細取得失敗(2回)', item.name || url);
+          completeQueueItem(url, '再試行上限');
           continue;
         }
 
@@ -1618,6 +1697,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         if (score < (scrapeOptions.minScore ?? 0)) {
           speedStats.genreExcluded++;
           logSkip(item, '詳細取得前フィルタ', `${item.name || url} / score:${score}`);
+          completeQueueItem(url, '事前除外');
           continue;
         }
 
@@ -1704,7 +1784,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   // =====================================================================
   // メインループ
   // =====================================================================
-  while (!stopRequested && totalProcessed < effectiveMaxItems) {
+  while (!stopRequested && queueProcessed < queueTotal) {
     container = getScrollContainer() || container;
     if (!container) {
       speedStats.scrollEndReason = 'scroll_container_not_found';
@@ -1724,6 +1804,8 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
     // キューが空→スクロール
     if (!cardQueue.length) {
+      // 直前の10件がすべてスキップでも、未処理の事前収集URLがあれば必ず次batchへ進む。
+      if (precollectedIndex < precollectedItems.length) continue;
       if (isEndOfList(container)) {
         speedStats.scrollEndReason = 'end_of_list_message';
         break;
@@ -1766,7 +1848,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
     // =====================================================================
     // カードを1件ずつ処理
     // =====================================================================
-    while (cardQueue.length && !stopRequested && totalProcessed < effectiveMaxItems) {
+    while (cardQueue.length && !stopRequested) {
       const item = cardQueue.shift();
       const { url, name: cardName } = item;
 
@@ -1777,8 +1859,14 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
       const itemStartedAt = performance.now();
       attemptCounts.set(url, (attemptCounts.get(url) || 0) + 1);
+      const itemRun = {
+        url,
+        cancelled: false,
+        deadline: Date.now() + DETAIL_ITEM_HARD_TIMEOUT_MS
+      };
 
       try {
+        await runItemWithHardTimeout(itemRun, async () => {
         // --- 1. カード再解決 ---
         const searchStartedAt = performance.now();
         container = getScrollContainer() || container;
@@ -1805,9 +1893,9 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         if (!cardLink) {
           speedStats.failed++;
           if ((attemptCounts.get(url) || 0) >= 2) logSkip(item, '詳細取得失敗', cardName || url);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
+        assertItemRunActive(itemRun);
 
         // --- 2. クリック（詳細パネルを閉じない方式）---
         const clickStartedAt = performance.now();
@@ -1822,7 +1910,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
 
           // パネル内容の切り替わりを確認（前店舗名/URLと異なることを確認）
           const panelWaitStarted = performance.now();
-          const changed = await waitUntilPanelChanged(previousPanelName, previousPanelUrl, 4000);
+          const changed = await waitUntilPanelChanged(previousPanelName, previousPanelUrl, 1200);
           const fieldWaitStarted = performance.now();
           const fieldsReady = await waitForPanelFieldsReady({
             expectedName: cardName,
@@ -1830,7 +1918,8 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             previousName: previousPanelName,
             previousUrl: previousPanelUrl,
             previousAddress: previousPanelAddress
-          }, 3000);
+          }, 1800);
+          assertItemRunActive(itemRun);
           addTiming(speedStats, 'panelWait', performance.now() - fieldWaitStarted);
 
           const panelDidNotChange = changed.name === previousPanelName && changed.url === previousPanelUrl;
@@ -1839,24 +1928,25 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             reportV3Log(`パネル切り替わらず フォールバック: ${cardName || url}`);
             const backMs0 = performance.now();
             await closeDetailPanel();
+            assertItemRunActive(itemRun);
             addTiming(speedStats, 'back', performance.now() - backMs0);
 
             cardLink.click();
             const panelWaitFallback = performance.now();
-            const fallbackReady = await waitForDetailPanel(4000);
+            const fallbackReady = await waitForDetailPanel(1200);
             const fallbackFieldsReady = fallbackReady && await waitForPanelFieldsReady({
               expectedName: cardName,
               expectedUrl: url,
               previousName: previousPanelName,
               previousUrl: previousPanelUrl,
               previousAddress: previousPanelAddress
-            }, 3000);
+            }, 1500);
+            assertItemRunActive(itemRun);
             addTiming(speedStats, 'panelWait', performance.now() - panelWaitFallback);
             if (!fallbackReady || !fallbackFieldsReady) {
               speedStats.failed++;
-              queuedOrProcessingUrls.delete(url);
               logSkip(item, '詳細取得失敗(フォールバック)', cardName || url);
-              continue;
+              return;
             }
           } else if (!fieldsReady) {
             reportV3Log(`詳細欄更新待ちタイムアウト: ${cardName || url}（取得は続行）`);
@@ -1867,15 +1957,15 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           addTiming(speedStats, 'click', performance.now() - clickStartedAt);
 
           const panelWaitStarted = performance.now();
-          const panelReady = await waitForDetailPanel(5000);
+          const panelReady = await waitForDetailPanel(1500);
           addTiming(speedStats, 'panelWait', performance.now() - panelWaitStarted);
 
           if (!panelReady) {
             speedStats.failed++;
             await closeDetailPanel();
-            queuedOrProcessingUrls.delete(url);
+            assertItemRunActive(itemRun);
             logSkip(item, '詳細取得失敗(パネル未表示)', cardName || url);
-            continue;
+            return;
           }
 
           const fieldWaitStarted = performance.now();
@@ -1885,7 +1975,8 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             previousName: previousPanelName,
             previousUrl: previousPanelUrl,
             previousAddress: previousPanelAddress
-          }, 3000);
+          }, 1800);
+          assertItemRunActive(itemRun);
           addTiming(speedStats, 'panelWait', performance.now() - fieldWaitStarted);
           if (!fieldsReady) {
             reportV3Log(`詳細欄更新待ちタイムアウト: ${cardName || url}（取得は続行）`);
@@ -1897,6 +1988,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         // --- 3. 情報取得 ---
         const scrapeStartedAt = performance.now();
         const detail = await scrapeDetailPanel(url, cardName, effectiveGenre);
+        assertItemRunActive(itemRun);
         detail.searchGenre = effectiveGenre;
         addTiming(speedStats, 'scrape', performance.now() - scrapeStartedAt);
 
@@ -1904,17 +1996,15 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         prevPanelName = detail.name || '';
         prevPanelUrl = window.location.href;
 
-        if (!detail.name || detail.name === '結果') {
+        if (!isUsablePlaceTitle(detail.name)) {
           logSkip(item, '店名未取得', `URL:${url}`);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         if (!detail.address) {
           speedStats.addressMissing++;
           logSkip(item, '住所未取得', `店舗名:${detail.name}`);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         reportV3Log(`ジャンル変換: ${detail.googleGenre || '(未取得)'} → ${detail.genre || '(空欄)'} / 検索:${effectiveGenre || '-'}`);
@@ -1922,23 +2012,20 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         if (isClosedBusinessStatus(detail)) {
           speedStats.genreExcluded++;
           logSkip(item, '休業・閉業除外', `${detail.name}|${detail.businessStatusLabel || detail.businessStatus}`);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         if (!matchesStrictRequestedGenre(detail, [outputGenre, effectiveGenre])) {
           speedStats.genreExcluded++;
           logSkip(item, '対象外ジャンル除外', `${detail.name}|${detail.genre}(${detail.googleGenre}) / 指定:${outputGenre || effectiveGenre}`);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         // ジャンルフィルタ
         if (!matchesTargetGenres(detail, targetGenres)) {
           speedStats.genreExcluded++;
           logSkip(item, 'ジャンル不一致', `${detail.name}|${detail.genre}(${detail.googleGenre})`);
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         // エリアフィルタ
@@ -1949,8 +2036,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
             'エリア外除外',
             `店舗名:${detail.name} / 住所:${detail.address} / 指定:${targetArea.prefecture}${targetArea.city}`
           );
-          queuedOrProcessingUrls.delete(url);
-          continue;
+          return;
         }
 
         const parsedAddr = parseAddress(detail.address);
@@ -2013,7 +2099,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
         pendingBatch.push(record);
         existingRecords.set(url, record);
 
-        if (pendingBatch.length >= BATCH_SIZE || totalProcessed >= effectiveMaxItems || !isScrapingActive) {
+        if (pendingBatch.length >= BATCH_SIZE || queueProcessed + 1 >= queueTotal || !isScrapingActive) {
           const saveStartedAt = performance.now();
           currentFlushPromise = flushBatch(pendingBatch);
           const flushed = await currentFlushPromise;
@@ -2033,24 +2119,34 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
           });
         } catch (_) { }
 
-        queuedOrProcessingUrls.delete(url);
-
+        });
       } catch (err) {
         console.error('[Scraper] エラー:', err);
         speedStats.failed++;
-        if ((attemptCounts.get(url) || 0) >= 2) logSkip(item, '詳細取得失敗(例外)', cardName || url);
-        queuedOrProcessingUrls.delete(url);
+        const hardTimedOut = err?.message?.includes('detail_item_hard_timeout');
+        logSkip(item, hardTimedOut ? '詳細取得HARD TIMEOUT' : '詳細取得失敗(例外)', cardName || url);
         // エラー時は既存の詳細パネルを閉じてリカバリ
-        if (isDetailPanelOpen()) {
-          await closeDetailPanel().catch(() => {});
+        if (!hardTimedOut && isDetailPanelOpen()) {
+          await Promise.race([closeDetailPanel(), sleep(500)]).catch(() => {});
           prevPanelName = '';
           prevPanelUrl = window.location.href;
         }
-        await sleep(200);
+        if (!hardTimedOut) await sleep(100);
+      } finally {
+        itemRun.cancelled = true;
+        processedUrls.add(url);
+        queuedOrProcessingUrls.delete(url);
+        completeQueueItem(url, '処理完了');
       }
     }
 
-    if (stopRequested || totalProcessed >= effectiveMaxItems) break;
+    if (stopRequested || queueProcessed >= queueTotal) break;
+  }
+
+  if (!stopRequested && queueProcessed !== queueTotal) {
+    reportV3Log(`詳細フェーズ件数不一致: queueProcessed=${queueProcessed} / queueTotal=${queueTotal}`);
+  } else if (!stopRequested) {
+    reportV3Log(`詳細フェーズ完了: queueProcessed=${queueProcessed} / queueTotal=${queueTotal}`);
   }
 
   // =====================================================================
@@ -2059,7 +2155,7 @@ async function startScrapingCore(maxItems, targetGenres = [], searchArea = '', s
   if (!speedStats.scrollEndReason) {
     speedStats.scrollEndReason = stopRequested
       ? 'stopped_by_user'
-      : (totalProcessed >= effectiveMaxItems ? 'target_count_reached' : 'scraping_stopped');
+      : (queueProcessed >= queueTotal ? 'detail_queue_drained' : 'scraping_stopped');
   }
 
   if (pendingBatch.length > 0) {

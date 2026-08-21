@@ -14,6 +14,7 @@
 
   const baseScrapeDetailPanel = scrapeDetailPanel;
   const phoneOwnerByNumber = new Map();
+  const NON_PLACE_TITLES = new Set(['結果', '検索結果', 'results', 'search results']);
 
   function guardNormalizeText(value) {
     return String(value || '')
@@ -52,28 +53,66 @@
     }
   }
 
+  function extractGooglePlaceIdentity(url) {
+    const text = String(url || '');
+    const placeMatch = text.match(/!1s(0x[0-9a-f]+:0x[0-9a-f]+)/i);
+    if (placeMatch) return placeMatch[1].toLowerCase();
+    const matches = text.match(/0x[0-9a-f]+:0x[0-9a-f]+/ig);
+    return matches?.length ? matches[matches.length - 1].toLowerCase() : '';
+  }
+
   function guardNormalizePlaceUrl(url) {
-    try {
-      const parsed = new URL(url, location.href);
-      if (!parsed.pathname.includes('/maps/place/')) return '';
-      parsed.search = '';
-      parsed.hash = '';
-      return parsed.toString();
-    } catch (_) {
-      return String(url || '').split('?')[0].split('#')[0];
+    return extractGooglePlaceIdentity(url);
+  }
+
+  function isUsablePlaceTitle(value) {
+    const title = String(value || '').normalize('NFKC').trim();
+    return !!title && !NON_PLACE_TITLES.has(title.toLowerCase());
+  }
+
+  function findDetailContainer() {
+    const anchors = [
+      document.querySelector('button[data-item-id="address"]'),
+      document.querySelector('button[data-item-id^="phone:tel:"]'),
+      document.querySelector('button[data-item-id="oh"]')
+    ].filter(Boolean);
+    for (const anchor of anchors) {
+      let node = anchor.parentElement;
+      for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+        const title = Array.from(node.querySelectorAll('h1'))
+          .map(el => el.textContent?.trim() || '')
+          .find(isUsablePlaceTitle);
+        if (title) return node;
+      }
     }
+    return null;
+  }
+
+  function readDetailTitle(container) {
+    if (!container) return '';
+    const selectors = ['h1.DUwDvf', 'h1', '[role="heading"][aria-level="1"]'];
+    for (const selector of selectors) {
+      const title = Array.from(container.querySelectorAll(selector))
+        .map(el => el.textContent?.trim() || '')
+        .find(isUsablePlaceTitle);
+      if (title) return title;
+    }
+    return '';
   }
 
   function guardReadPanelSnapshot() {
-    const name = (document.querySelector('[role="main"] h1')?.textContent?.trim()) || '';
+    const detailContainer = findDetailContainer();
+    const name = readDetailTitle(detailContainer);
 
-    const addrBtn = document.querySelector('button[data-item-id="address"]');
+    const addrBtn = detailContainer?.querySelector('button[data-item-id="address"]')
+      || document.querySelector('button[data-item-id="address"]');
     const addressRaw = addrBtn
       ? (addrBtn.getAttribute('aria-label') || addrBtn.textContent || '')
       : '';
     const address = addressRaw.replace(/^住所[：:]\s*/, '').trim();
 
-    const phoneBtn = document.querySelector('button[data-item-id^="phone:tel:"]');
+    const phoneBtn = detailContainer?.querySelector('button[data-item-id^="phone:tel:"]')
+      || document.querySelector('button[data-item-id^="phone:tel:"]');
     const phoneRaw = phoneBtn
       ? ((phoneBtn.getAttribute('data-item-id') || '').replace(/^phone:tel:/, '') || phoneBtn.textContent || '')
       : '';
@@ -84,12 +123,13 @@
       address,
       phone,
       url: window.location.href,
-      normalizedUrl: guardNormalizePlaceUrl(window.location.href)
+      placeIdentity: extractGooglePlaceIdentity(window.location.href),
+      normalizedUrl: extractGooglePlaceIdentity(window.location.href)
     };
   }
 
   function guardIdentityMatches(snapshot, expectedName, expectedUrl) {
-    const expectedUrlNormalized = guardNormalizePlaceUrl(expectedUrl);
+    const expectedUrlNormalized = extractGooglePlaceIdentity(expectedUrl);
     const expectedUrlName = guardPlaceNameFromUrl(expectedUrl);
 
     const urlMatches = !!(
@@ -103,9 +143,8 @@
       ? true
       : expectedNames.some(name => guardSameName(snapshot.name, name));
 
-    // URLだけ先に切り替わり、h1が前店舗のまま残るケースもあるため両方一致を要求する。
-    // expectedUrl が取得できないケースだけ店名一致にフォールバックする。
-    return expectedUrlNormalized ? (urlMatches && nameMatches) : nameMatches;
+    // 固有identityが一致すれば、document側の「結果」見出しを理由に待機しない。
+    return expectedUrlNormalized ? urlMatches : nameMatches;
   }
 
   function guardSnapshotSignature(snapshot) {
@@ -120,7 +159,7 @@
   async function strictWaitForPanelFieldsReady(options = {}, timeoutMs = 5500) {
     const expectedName = options.expectedName || '';
     const expectedUrl = options.expectedUrl || '';
-    const deadline = Date.now() + Math.max(timeoutMs, 2500);
+    const deadline = Date.now() + Math.min(Math.max(timeoutMs, 500), 2000);
 
     let lastSignature = '';
     let stableSince = 0;
@@ -184,13 +223,17 @@
   waitForPanelFieldsReady = strictWaitForPanelFieldsReady;
 
   scrapeDetailPanel = async function guardedScrapeDetailPanel(placeUrl, cardName = '', searchGenre = '') {
-    await strictWaitForPanelFieldsReady({ expectedName: cardName, expectedUrl: placeUrl }, 6000);
+    await strictWaitForPanelFieldsReady({ expectedName: cardName, expectedUrl: placeUrl }, 1800);
 
     const detail = await baseScrapeDetailPanel(placeUrl, cardName, searchGenre);
     const snapshot = guardReadPanelSnapshot();
 
     if (!guardIdentityMatches(snapshot, cardName || detail?.name || '', placeUrl)) {
       throw new Error(`panel_identity_changed_during_scrape: ${cardName || placeUrl}`);
+    }
+
+    if (detail?.name && !isUsablePlaceTitle(detail.name)) {
+      throw new Error(`invalid_place_title: ${detail.name}`);
     }
 
     if (detail?.name && cardName && !guardSameName(detail.name, cardName)) {
